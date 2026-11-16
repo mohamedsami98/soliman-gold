@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   X,
   Lock,
@@ -37,14 +37,18 @@ import {
   LogOut,
   Database,
   ShieldCheck,
-  Mail
+  Mail,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { doc, getDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { auth, db } from '../firebase';
 import { useFirebase } from '../context/FirebaseContext';
 import {
   createProductInFirestore,
   updateProductInFirestore,
+  updateProductImagesInFirestore,
+  mergeProductImages,
   deleteProductInFirestore,
   clearAllProductsInFirestore,
   bulkUpsertProductsInFirestore,
@@ -52,6 +56,11 @@ import {
   saveAdminPinInFirestore,
   saveMediaItemInFirestore,
 } from '../services/firestoreStore';
+import {
+  CLOUDINARY_PRODUCT_ACCEPT,
+  isCloudinaryOrUploadedImage,
+  uploadProductImageToCloudinary,
+} from '../services/cloudinaryUpload';
 import { Product, StoreSettings, Category } from '../types/jewelry';
 import { formatCurrency } from '../utils/whatsapp';
 import {
@@ -67,6 +76,8 @@ interface AdminDashboardProps {
   products: Product[];
   onClose: () => void;
   onRefreshData?: () => void;
+  theme?: 'light' | 'dark';
+  onToggleTheme?: () => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -76,6 +87,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   products,
   onClose,
   onRefreshData,
+  theme = 'light',
+  onToggleTheme,
 }) => {
   const {
     user,
@@ -124,6 +137,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [formSeoTitle, setFormSeoTitle] = useState('');
   const [formImagesText, setFormImagesText] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
+  const [statusType, setStatusType] = useState<'info' | 'success' | 'error'>('success');
+  const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showStatus = (
+    message: string,
+    type: 'info' | 'success' | 'error' = 'success',
+    autoClearMs = 4500
+  ) => {
+    if (statusTimerRef.current) {
+      clearTimeout(statusTimerRef.current);
+      statusTimerRef.current = null;
+    }
+    setStatusMessage(message);
+    setStatusType(type);
+    if (message && autoClearMs > 0) {
+      statusTimerRef.current = setTimeout(() => {
+        setStatusMessage('');
+      }, autoClearMs);
+    }
+  };
 
   // Store Settings Form State
   const [tempSettings, setTempSettings] = useState<StoreSettings>(settings);
@@ -423,46 +456,89 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleDirectProductImageUpload = async (product: Product, file: File) => {
-    if (!file || !file.type.startsWith('image/')) return;
+  const canUploadProductImages = Boolean(
+    isAuthenticated && user && user.emailVerified && isAdmin && auth.currentUser
+  );
+
+  useEffect(() => {
+    if (!user) {
+      setIsAuthenticated(false);
+    }
+  }, [user]);
+
+  const handleDirectProductImageUpload = async (
+    product: Product,
+    filesInput: File | File[],
+    mode: 'replace' | 'append' = 'replace'
+  ) => {
+    if (!canUploadProductImages || !auth.currentUser) {
+      showStatus(
+        'غير مصرح: هذه الواجهة مخصصة لحساب المدير المصادق عليه عبر Firebase فقط.',
+        'error',
+        6000
+      );
+      return;
+    }
+
+    const files = (Array.isArray(filesInput) ? filesInput : [filesInput]).filter(Boolean);
+    if (files.length === 0) return;
+
     setUploadingProductId(product.id);
-    setStatusMessage(`جارٍ رفع صورة (${product.name}) من جهاز الكمبيوتر وحفظها في Firebase...`);
-    const uploadPin = enteredPin || adminPinFromDb || '112233';
+    showStatus(
+      files.length > 1
+        ? `جارٍ رفع ${files.length} صور للمنتج "${product.name}" إلى Cloudinary...`
+        : `جارٍ رفع صورة "${product.name}" إلى Cloudinary...`,
+      'info',
+      0
+    );
 
     try {
-      const dataUrl = await readFileAsDataUrl(file);
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pin: uploadPin,
-          image: dataUrl,
-          filename: `${product.code}_${file.name}`,
-          productCode: product.code,
-        }),
-      });
-      const data = await res.json();
-      if (data.success && data.url) {
-        const updatedImages = [data.url, ...(product.images || []).filter((img) => img !== data.url)];
-        await updateProductInFirestore(product.id, {
-          ...product,
-          images: updatedImages,
-        });
-        await saveMediaItemInFirestore({
-          filename: data.filename || `${product.code}_${file.name}`,
-          url: data.url,
-          size: file.size,
-          productCode: product.code,
-        }).catch(() => null);
-
-        setStatusMessage(`تم بنجاح رفع وتعيين صورة جديدة لـ "${product.name}" في Firebase!`);
-        onRefreshData?.();
-        setTimeout(() => setStatusMessage(''), 3500);
-      } else {
-        setStatusMessage(`خطأ: ${data.message || 'فشل رفع الصورة'}`);
+      const uploadedResults = [];
+      for (const file of files) {
+        const uploaded = await uploadProductImageToCloudinary(file);
+        uploadedResults.push({ uploaded, file });
       }
-    } catch (err) {
-      setStatusMessage('حدث خطأ أثناء رفع الصورة');
+
+      const uploadedUrls = uploadedResults.map((item) => item.uploaded.secureUrl);
+      const nextImages = mergeProductImages(product.images, uploadedUrls, mode);
+
+      showStatus(
+        `تم رفع الصورة إلى Cloudinary، جارٍ حفظ الرابط في Firestore للمنتج "${product.name}"...`,
+        'info',
+        0
+      );
+
+      // Update ONLY images + updatedAt in Firestore (preserves code, name, weight, price, karat, category)
+      await updateProductImagesInFirestore(product.id, nextImages);
+
+      // Best-effort log to admin media collection
+      await Promise.all(
+        uploadedResults.map(({ uploaded, file }) =>
+          saveMediaItemInFirestore({
+            filename: `${product.code}_${file.name}`,
+            url: uploaded.secureUrl,
+            size: uploaded.bytes || file.size,
+            productCode: product.code,
+          }).catch(() => null)
+        )
+      );
+
+      showStatus(
+        mode === 'append'
+          ? `تمت إضافة ${uploadedUrls.length} صورة إلى "${product.name}" وحفظها في Firestore بنجاح!`
+          : `تم رفع الصورة عبر Cloudinary وحفظ رابطها للمنتج "${product.name}" في Firestore بنجاح!`,
+        'success',
+        5000
+      );
+      onRefreshData?.();
+    } catch (err: any) {
+      console.error('Product Cloudinary upload failed:', err);
+      const rawMessage = err instanceof Error ? err.message : String(err || '');
+      let friendlyMessage = rawMessage || 'حدث خطأ أثناء رفع الصورة أو حفظها في Firestore.';
+      if (rawMessage.includes('Missing or insufficient permissions') || rawMessage.includes('permission-denied')) {
+        friendlyMessage = 'رفض Firebase حفظ الصورة: تأكد من تسجيل الدخول بحساب المدير المصرح له ومفعّل البريد.';
+      }
+      showStatus(friendlyMessage, 'error', 7000);
     } finally {
       setUploadingProductId(null);
     }
@@ -893,31 +969,54 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-fadeIn">
-      <div className="relative w-full max-w-5xl rounded-2xl bg-[#111111] border border-[#C6A667]/35 shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50 dark:bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 animate-fadeIn">
+      <div className="relative w-full max-w-5xl rounded-2xl bg-[#FAF8F3] dark:bg-[#14151B] text-[#1A1A1A] dark:text-[#FAF8F3] border border-[#E8DEC9] dark:border-stone-800 shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col transition-colors">
         
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-stone-800 bg-[#161616] shrink-0 gap-3">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[#E8DEC9] dark:border-stone-800 bg-[#F4EFE6] dark:bg-[#191B23] shrink-0 gap-3">
           <div className="flex items-center gap-3">
-            <img
-              src={settings.logoUrl || '/assets/aistudio/logo_20a2cea5.jpeg'}
-              alt="SOLIMAN GOLD"
-              className="h-10 w-auto object-contain rounded"
-            />
+            <div className="bg-[#111111] p-1 rounded-lg border border-[#C6A667]/50 shrink-0 shadow-xs">
+              <img
+                src={settings.logoUrl || '/assets/aistudio/logo_20a2cea5.jpeg'}
+                alt="SOLIMAN GOLD"
+                className="h-9 w-auto object-contain rounded-xs"
+              />
+            </div>
             <div>
-              <h3 className="text-base font-bold text-[#FAF8F3]">لوحة إدارة SOLIMAN GOLD (سليمان جولد)</h3>
-              <p className="text-[11px] text-stone-400">إدارة المنتجات، العروض، أسعار الذهب، وأرقام واتساب</p>
+              <h3 className="text-base font-bold text-[#111111] dark:text-[#FAF8F3]">لوحة إدارة SOLIMAN GOLD (سليمان جولد)</h3>
+              <p className="text-[11px] text-stone-600 dark:text-stone-400">إدارة المنتجات، العروض، أسعار الذهب، وأرقام واتساب</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
+            {onToggleTheme && (
+              <button
+                type="button"
+                onClick={onToggleTheme}
+                className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#1B1D25] hover:bg-[#FAF8F3] dark:hover:bg-[#232632] text-[#8A6A2E] dark:text-[#E2CCA1] border border-[#E0D6C3] dark:border-stone-700 text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                title={theme === 'dark' ? 'تبديل للوضع الفاتح' : 'تبديل للوضع الداكن'}
+              >
+                {theme === 'dark' ? (
+                  <>
+                    <Sun className="w-3.5 h-3.5 text-[#E2CCA1]" />
+                    <span className="hidden sm:inline">فاتح</span>
+                  </>
+                ) : (
+                  <>
+                    <Moon className="w-3.5 h-3.5 text-[#8A6A2E]" />
+                    <span className="hidden sm:inline">داكن</span>
+                  </>
+                )}
+              </button>
+            )}
+
             {isAuthenticated && user && (
               <>
-                <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#1C1F26] border border-[#C6A667]/30 text-[11px] text-stone-300">
-                  <Database className="w-3.5 h-3.5 text-emerald-400" />
+                <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white dark:bg-[#1B1D25] border border-[#E0D6C3] dark:border-stone-700 text-[11px] text-stone-700 dark:text-stone-300 shadow-xs">
+                  <Database className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                   <span>{firestoreSynced ? 'Firebase Firestore متصل' : 'مزامنة سحابية'}</span>
-                  <span className="text-stone-500">·</span>
-                  <span className="font-mono text-[#E2CCA1]">{user.email}</span>
+                  <span className="text-stone-400">·</span>
+                  <span className="font-mono font-bold text-[#8A6A2E] dark:text-[#E2CCA1]">{user.email}</span>
                 </div>
 
                 <button
@@ -929,7 +1028,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     setLoginEmail('');
                     setLoginPassword('');
                   }}
-                  className="px-2.5 py-1.5 rounded-lg bg-[#1E1E1E] hover:bg-rose-950/60 text-stone-300 hover:text-rose-300 border border-stone-700/70 text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
+                  className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#1B1D25] hover:bg-rose-50 dark:hover:bg-rose-950/40 text-stone-700 dark:text-stone-300 hover:text-rose-700 dark:hover:text-rose-300 border border-[#E0D6C3] dark:border-stone-700 hover:border-rose-300 dark:hover:border-rose-800 text-[11px] font-medium flex items-center gap-1 transition-colors cursor-pointer"
                   title="تسجيل الخروج"
                 >
                   <LogOut className="w-3.5 h-3.5" />
@@ -940,7 +1039,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             <button
               onClick={onClose}
-              className="p-1.5 rounded-lg bg-[#1E1E1E] text-stone-300 hover:text-white transition-colors cursor-pointer"
+              className="p-1.5 rounded-lg bg-white dark:bg-[#1B1D25] border border-[#E0D6C3] dark:border-stone-700 text-stone-600 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white transition-colors cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -950,24 +1049,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Content Area */}
         {!isAuthenticated ? (
           /* Authentication Screen */
-          <div className="p-6 sm:p-10 max-w-md mx-auto text-center space-y-5 overflow-y-auto">
+          <div className="p-6 sm:p-10 max-w-md mx-auto text-center space-y-5 overflow-y-auto w-full">
             <div className="flex justify-center">
-              <img
-                src={settings.logoUrl || '/assets/aistudio/logo_20a2cea5.jpeg'}
-                alt="SOLIMAN GOLD"
-                className="h-20 sm:h-24 w-auto object-contain drop-shadow-[0_4px_20px_rgba(198,166,103,0.4)]"
-              />
+              <div className="bg-[#111111] p-2 rounded-2xl border border-[#C6A667]/60 shadow-lg">
+                <img
+                  src={settings.logoUrl || '/assets/aistudio/logo_20a2cea5.jpeg'}
+                  alt="SOLIMAN GOLD"
+                  className="h-16 sm:h-20 w-auto object-contain rounded-lg"
+                />
+              </div>
             </div>
 
             <div>
-              <h4 className="text-lg font-bold text-[#FAF8F3]">تسجيل دخول لوحة التحكم</h4>
-              <p className="text-xs text-stone-400 mt-1">
+              <h4 className="text-lg font-bold text-[#111111] dark:text-[#FAF8F3]">تسجيل دخول لوحة التحكم</h4>
+              <p className="text-xs text-stone-600 dark:text-stone-400 mt-1">
                 اختر طريقة الدخول بحساب المالك لإدارة الكتالوج والأسعار على Firebase
               </p>
             </div>
 
             {/* Login Mode Switcher */}
-            <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-[#181920] border border-stone-800 text-xs">
+            <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-[#EFE9DD] dark:bg-[#191B23] border border-[#E0D6C3] dark:border-stone-800 text-xs">
               <button
                 type="button"
                 onClick={() => {
@@ -977,8 +1078,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 }}
                 className={`py-2 px-3 rounded-lg font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
                   loginMethod === 'email'
-                    ? 'bg-[#C6A667] text-[#111111]'
-                    : 'text-stone-400 hover:text-white'
+                    ? 'bg-[#C6A667] text-[#111111] shadow-xs'
+                    : 'text-stone-600 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white'
                 }`}
               >
                 <Mail className="w-3.5 h-3.5" />
@@ -994,8 +1095,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 }}
                 className={`py-2 px-3 rounded-lg font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
                   loginMethod === 'google'
-                    ? 'bg-[#C6A667] text-[#111111]'
-                    : 'text-stone-400 hover:text-white'
+                    ? 'bg-[#C6A667] text-[#111111] shadow-xs'
+                    : 'text-stone-600 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white'
                 }`}
               >
                 <ShieldCheck className="w-3.5 h-3.5" />
@@ -1004,17 +1105,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {loginMethod === 'email' ? (
-              <form onSubmit={handleLogin} className="space-y-3.5 text-right" autoComplete="off">
+              <form onSubmit={handleLogin} className="space-y-3.5 text-right bg-white dark:bg-[#1B1D25] p-5 rounded-2xl border border-[#E8DEC9] dark:border-stone-800 shadow-xs" autoComplete="off">
                 {user && isAdmin && (
-                  <div className="p-3 rounded-xl bg-emerald-950/30 border border-emerald-700/40 flex items-center justify-between gap-2">
+                  <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/60 flex items-center justify-between gap-2">
                     <div className="text-right min-w-0">
-                      <p className="text-[11px] text-emerald-300 font-bold">جلسة مالك نشطة</p>
-                      <p className="text-[11px] font-mono text-stone-300 truncate">{user.email}</p>
+                      <p className="text-[11px] text-emerald-800 dark:text-emerald-300 font-bold">جلسة مالك نشطة</p>
+                      <p className="text-[11px] font-mono text-stone-700 dark:text-stone-300 truncate">{user.email}</p>
                     </div>
                     <button
                       type="button"
                       onClick={() => setIsAuthenticated(true)}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs shrink-0 cursor-pointer"
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shrink-0 cursor-pointer"
                     >
                       دخول مباشر
                     </button>
@@ -1022,7 +1123,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 )}
 
                 <div>
-                  <label className="block text-xs text-stone-300 font-semibold mb-1.5">
+                  <label className="block text-xs text-stone-700 dark:text-stone-300 font-semibold mb-1.5">
                     البريد الإلكتروني
                   </label>
                   <input
@@ -1033,13 +1134,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     onChange={(e) => setLoginEmail(e.target.value)}
                     placeholder="أدخل البريد الإلكتروني..."
                     dir="ltr"
-                    className="w-full py-3 px-3.5 rounded-xl bg-[#181818] border border-stone-700 text-sm text-white placeholder-stone-500 focus:border-[#C6A667] outline-none text-left"
+                    className="w-full py-3 px-3.5 rounded-xl bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 text-sm text-[#111111] dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:border-[#C6A667] outline-none text-left"
                     autoFocus
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs text-stone-300 font-semibold mb-1.5">
+                  <label className="block text-xs text-stone-700 dark:text-stone-300 font-semibold mb-1.5">
                     كلمة المرور
                   </label>
                   <div className="relative">
@@ -1051,12 +1152,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       onChange={(e) => setLoginPassword(e.target.value)}
                       placeholder="••••••••"
                       dir="ltr"
-                      className="w-full py-3 px-3.5 pl-10 rounded-xl bg-[#181818] border border-stone-700 text-sm font-mono text-white placeholder-stone-500 focus:border-[#C6A667] outline-none text-left"
+                      className="w-full py-3 px-3.5 pl-10 rounded-xl bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 text-sm font-mono text-[#111111] dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:border-[#C6A667] outline-none text-left"
                     />
                     <button
                       type="button"
                       onClick={() => setShowLoginPin(!showLoginPin)}
-                      className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-white transition-colors cursor-pointer p-1"
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white transition-colors cursor-pointer p-1"
                       title={showLoginPin ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
                     >
                       {showLoginPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -1066,7 +1167,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 {/* Email verification banner when signed in but unverified */}
                 {user && !user.emailVerified && (
-                  <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-700/50 text-amber-200 text-xs space-y-2 text-center">
+                  <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/50 text-amber-900 dark:text-amber-200 text-xs space-y-2 text-center">
                     <p>الحساب ({user.email}) مسجل لكنه غير مفعّل بعد.</p>
                     <div className="flex items-center justify-center gap-2">
                       <button
@@ -1079,7 +1180,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             setAuthError('تعذر إرسال رابط التفعيل حالياً. حاول بعد دقيقة.');
                           }
                         }}
-                        className="px-3 py-1.5 rounded-lg bg-amber-500 text-black font-bold text-[11px] cursor-pointer"
+                        className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-[#111111] font-bold text-[11px] cursor-pointer"
                       >
                         إرسال رابط التفعيل
                       </button>
@@ -1096,7 +1197,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           }
                           setAuthError('لم يتم تأكيد التفعيل بعد. افتح الرابط المرسل لبريدك ثم أعد المحاولة.');
                         }}
-                        className="px-3 py-1.5 rounded-lg bg-stone-800 text-white text-[11px] cursor-pointer"
+                        className="px-3 py-1.5 rounded-lg bg-white dark:bg-[#1B1D25] hover:bg-amber-100 dark:hover:bg-amber-900/40 border border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-200 font-semibold text-[11px] cursor-pointer transition-colors"
                       >
                         تحقق من التفعيل
                       </button>
@@ -1105,13 +1206,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 )}
 
                 {authInfoMessage && (
-                  <p className="text-xs text-emerald-300 bg-emerald-950/40 p-2.5 rounded-lg border border-emerald-800 text-center">
+                  <p className="text-xs text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 p-2.5 rounded-lg border border-emerald-200 dark:border-emerald-800/60 text-center">
                     {authInfoMessage}
                   </p>
                 )}
 
                 {authError && (
-                  <p className="text-xs text-red-400 bg-red-950/40 p-2.5 rounded-lg border border-red-800 text-center">
+                  <p className="text-xs text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/50 p-2.5 rounded-lg border border-rose-200 dark:border-rose-800 text-center">
                     {authError}
                   </p>
                 )}
@@ -1119,7 +1220,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <button
                   type="submit"
                   disabled={isLoggingIn}
-                  className="w-full py-3 rounded-xl bg-[#C6A667] hover:bg-[#E2CCA1] text-[#111111] font-bold text-sm transition-colors cursor-pointer disabled:opacity-60"
+                  className="w-full py-3 rounded-xl bg-[#C6A667] hover:bg-[#B89347] text-[#111111] font-bold text-sm transition-colors cursor-pointer disabled:opacity-60 shadow-sm"
                 >
                   {isLoggingIn
                     ? 'جارٍ التحقق...'
@@ -1136,7 +1237,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       setAuthError('');
                       setAuthInfoMessage('');
                     }}
-                    className="text-[#C6A667] hover:underline cursor-pointer"
+                    className="text-[#8A6A2E] dark:text-[#C6A667] font-semibold hover:underline cursor-pointer"
                   >
                     {isEmailSignUp
                       ? 'لديك حساب بالفعل؟ العودة لتسجيل الدخول'
@@ -1147,7 +1248,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <button
                       type="button"
                       onClick={() => logoutFirebase()}
-                      className="text-stone-400 hover:text-white cursor-pointer"
+                      className="text-stone-500 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white cursor-pointer"
                     >
                       تسجيل خروج ({user.email})
                     </button>
@@ -1155,24 +1256,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </form>
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-4 bg-white dark:bg-[#1B1D25] p-5 rounded-2xl border border-[#E8DEC9] dark:border-stone-800 shadow-xs">
                 {/* Google Account Status Card */}
-                <div className="p-3.5 rounded-xl bg-[#16171F] border border-stone-800 text-xs space-y-2.5">
+                <div className="p-3.5 rounded-xl bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800 text-xs space-y-2.5">
                   {user ? (
                     <div className="flex items-center justify-between gap-2 text-right">
                       <div className="flex items-center gap-2 min-w-0">
-                        <ShieldCheck className={`w-4 h-4 shrink-0 ${isAdmin ? 'text-emerald-400' : 'text-amber-400'}`} />
+                        <ShieldCheck className={`w-4 h-4 shrink-0 ${isAdmin ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`} />
                         <div className="min-w-0">
-                          <p className={`font-semibold truncate ${isAdmin ? 'text-emerald-300' : 'text-amber-300'}`}>
+                          <p className={`font-semibold truncate ${isAdmin ? 'text-emerald-800 dark:text-emerald-300' : 'text-amber-800 dark:text-amber-300'}`}>
                             {isAdmin ? 'تم التحقق من حساب المالك' : 'حساب غير مصرح له بالإدارة'}
                           </p>
-                          <p className="text-[11px] font-mono text-stone-400 truncate">{user.email}</p>
+                          <p className="text-[11px] font-mono text-stone-600 dark:text-stone-400 truncate">{user.email}</p>
                         </div>
                       </div>
                       <button
                         type="button"
                         onClick={() => logoutFirebase()}
-                        className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 text-[11px] shrink-0 cursor-pointer"
+                        className="px-2.5 py-1 rounded-lg bg-white dark:bg-[#1B1D25] hover:bg-stone-100 dark:hover:bg-[#232632] border border-[#E0D6C3] dark:border-stone-700 text-stone-700 dark:text-stone-300 text-[11px] shrink-0 cursor-pointer"
                       >
                         تبديل
                       </button>
@@ -1197,9 +1298,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           }
                         }
                       }}
-                      className="w-full py-2.5 px-4 rounded-lg bg-[#1F222E] hover:bg-[#2A2E3D] border border-[#C6A667]/40 text-[#FAF8F3] font-semibold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                      className="w-full py-2.5 px-4 rounded-lg bg-white dark:bg-[#1B1D25] hover:bg-[#F4EFE6] dark:hover:bg-[#232632] border border-[#C6A667]/60 text-[#111111] dark:text-[#FAF8F3] font-bold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-xs"
                     >
-                      <ShieldCheck className="w-4 h-4 text-[#C6A667]" />
+                      <ShieldCheck className="w-4 h-4 text-[#8A6A2E] dark:text-[#C6A667]" />
                       <span>تسجيل الدخول بحساب Google المعتمد</span>
                     </button>
                   )}
@@ -1212,12 +1313,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       value={enteredPin}
                       onChange={(e) => setEnteredPin(e.target.value)}
                       placeholder="رمز الأمان (••••••)"
-                      className="w-full text-center py-3 px-10 rounded-xl bg-[#181818] border border-stone-700 text-lg font-mono text-white tracking-widest focus:border-[#C6A667] outline-none"
+                      className="w-full text-center py-3 px-10 rounded-xl bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 text-lg font-mono text-[#111111] dark:text-white tracking-widest focus:border-[#C6A667] outline-none"
                     />
                     <button
                       type="button"
                       onClick={() => setShowLoginPin(!showLoginPin)}
-                      className="absolute left-3.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-white transition-colors cursor-pointer p-1"
+                      className="absolute left-3.5 top-1/2 -translate-y-1/2 text-stone-500 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white transition-colors cursor-pointer p-1"
                       title={showLoginPin ? 'إخفاء الرمز' : 'إظهار الرمز'}
                     >
                       {showLoginPin ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
@@ -1225,7 +1326,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
 
                   {authError && (
-                    <p className="text-xs text-red-400 bg-red-950/40 p-2 rounded border border-red-800">
+                    <p className="text-xs text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/50 p-2 rounded border border-rose-200 dark:border-rose-800">
                       {authError}
                     </p>
                   )}
@@ -1233,7 +1334,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <button
                     type="submit"
                     disabled={isLoggingIn}
-                    className="w-full py-3 rounded-xl bg-[#C6A667] hover:bg-[#E2CCA1] text-[#111111] font-bold text-sm transition-colors cursor-pointer disabled:opacity-60"
+                    className="w-full py-3 rounded-xl bg-[#C6A667] hover:bg-[#B89347] text-[#111111] font-bold text-sm transition-colors cursor-pointer disabled:opacity-60 shadow-sm"
                   >
                     {isLoggingIn ? 'جارٍ التحقق...' : 'دخول'}
                   </button>
@@ -1246,7 +1347,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="flex flex-col flex-1 min-h-0">
             
             {/* Tabs Navigation */}
-            <div className="flex items-center gap-2 px-6 pt-3 border-b border-stone-800 bg-[#121318] overflow-x-auto shrink-0">
+            <div className="flex items-center gap-2 px-6 pt-3 border-b border-[#E8DEC9] dark:border-stone-800 bg-white dark:bg-[#191B23] overflow-x-auto shrink-0">
               <button
                 onClick={() => {
                   setActiveTab('products');
@@ -1255,8 +1356,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 }}
                 className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold border-b-2 whitespace-nowrap transition-colors cursor-pointer ${
                   activeTab === 'products'
-                    ? 'border-[#D4AF37] text-[#D4AF37]'
-                    : 'border-transparent text-stone-400 hover:text-stone-200'
+                    ? 'border-[#9E7F43] dark:border-[#C6A667] text-[#8A6A2E] dark:text-[#E2CCA1]'
+                    : 'border-transparent text-stone-500 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white'
                 }`}
               >
                 <Layers className="w-4 h-4" />
@@ -1267,8 +1368,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 onClick={() => setActiveTab('gold')}
                 className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold border-b-2 whitespace-nowrap transition-colors cursor-pointer ${
                   activeTab === 'gold'
-                    ? 'border-[#D4AF37] text-[#D4AF37]'
-                    : 'border-transparent text-stone-400 hover:text-stone-200'
+                    ? 'border-[#9E7F43] dark:border-[#C6A667] text-[#8A6A2E] dark:text-[#E2CCA1]'
+                    : 'border-transparent text-stone-500 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white'
                 }`}
               >
                 <TrendingUp className="w-4 h-4" />
@@ -1279,8 +1380,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 onClick={() => setActiveTab('settings')}
                 className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold border-b-2 whitespace-nowrap transition-colors cursor-pointer ${
                   activeTab === 'settings'
-                    ? 'border-[#D4AF37] text-[#D4AF37]'
-                    : 'border-transparent text-stone-400 hover:text-stone-200'
+                    ? 'border-[#9E7F43] dark:border-[#C6A667] text-[#8A6A2E] dark:text-[#E2CCA1]'
+                    : 'border-transparent text-stone-500 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white'
                 }`}
               >
                 <SettingsIcon className="w-4 h-4" />
@@ -1291,11 +1392,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 onClick={() => setActiveTab('bulk')}
                 className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold border-b-2 whitespace-nowrap transition-colors cursor-pointer ${
                   activeTab === 'bulk'
-                    ? 'border-[#D4AF37] text-[#D4AF37]'
-                    : 'border-transparent text-stone-400 hover:text-stone-200'
+                    ? 'border-[#9E7F43] dark:border-[#C6A667] text-[#8A6A2E] dark:text-[#E2CCA1]'
+                    : 'border-transparent text-stone-500 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white'
                 }`}
               >
-                <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                <FileSpreadsheet className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                 <span>استيراد إكسيل (شيت البرنامج)</span>
               </button>
 
@@ -1303,20 +1404,44 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 onClick={() => setActiveTab('media')}
                 className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold border-b-2 whitespace-nowrap transition-colors cursor-pointer ${
                   activeTab === 'media'
-                    ? 'border-[#D4AF37] text-[#D4AF37]'
-                    : 'border-transparent text-stone-400 hover:text-stone-200'
+                    ? 'border-[#9E7F43] dark:border-[#C6A667] text-[#8A6A2E] dark:text-[#E2CCA1]'
+                    : 'border-transparent text-stone-500 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white'
                 }`}
               >
-                <ImageIcon className="w-4 h-4 text-[#D4AF37]" />
+                <ImageIcon className="w-4 h-4 text-[#8A6A2E] dark:text-[#C6A667]" />
                 <span>مكتبة ورفع الصور من الكمبيوتر</span>
               </button>
             </div>
 
             {/* Status Message Toast */}
             {statusMessage && (
-              <div className="bg-[#D4AF37]/10 border-b border-[#D4AF37]/30 text-[#D4AF37] text-xs py-2 px-6 flex items-center gap-2 font-medium">
-                <Check className="w-4 h-4" />
-                <span>{statusMessage}</span>
+              <div
+                className={`border-b text-xs py-2.5 px-6 flex items-center justify-between gap-2 font-bold ${
+                  statusType === 'error'
+                    ? 'bg-rose-50 dark:bg-rose-950/50 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200'
+                    : statusType === 'info'
+                      ? 'bg-[#FDF8EC] dark:bg-[#201D17] border-[#C6A667]/40 text-[#8A6A2E] dark:text-[#E2CCA1]'
+                      : 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/60 text-emerald-800 dark:text-emerald-200'
+                }`}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  {statusType === 'error' ? (
+                    <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+                  ) : statusType === 'info' ? (
+                    <RefreshCw className="w-4 h-4 text-[#8A6A2E] dark:text-[#C6A667] animate-spin shrink-0" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  )}
+                  <span className="break-words">{statusMessage}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setStatusMessage('')}
+                  className="p-0.5 rounded hover:bg-black/5 dark:hover:bg-white/10 shrink-0 cursor-pointer"
+                  title="إغلاق الرسالة"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
             )}
 
@@ -1326,9 +1451,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 
                 {isAddingNew || editingProduct ? (
                   /* Add / Edit Form */
-                  <form onSubmit={handleSaveProduct} className="p-5 rounded-xl bg-[#14161C] border border-stone-800 space-y-4">
-                    <div className="flex items-center justify-between border-b border-stone-800 pb-3">
-                      <h4 className="text-sm font-bold text-[#FAF6ED]">
+                  <form onSubmit={handleSaveProduct} className="p-5 rounded-xl bg-white dark:bg-[#1B1D25] border border-[#E8DEC9] dark:border-stone-800 shadow-xs space-y-4">
+                    <div className="flex items-center justify-between border-b border-[#E8DEC9] dark:border-stone-800 pb-3">
+                      <h4 className="text-sm font-bold text-[#111111] dark:text-[#FAF8F3]">
                         {isAddingNew ? 'إضافة منتج جديد للكتالوج' : `تعديل المنتج: ${editingProduct?.name}`}
                       </h4>
                       <button
@@ -1337,7 +1462,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           setIsAddingNew(false);
                           setEditingProduct(null);
                         }}
-                        className="text-xs text-stone-400 hover:text-white"
+                        className="text-xs text-stone-600 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white font-medium cursor-pointer"
                       >
                         إلغاء
                       </button>
@@ -1345,35 +1470,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
                       <div>
-                        <label className="block text-stone-400 mb-1">اسم المنتج *</label>
+                        <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">اسم المنتج *</label>
                         <input
                           type="text"
                           required
                           value={formName}
                           onChange={(e) => setFormName(e.target.value)}
-                          className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 text-white focus:border-[#D4AF37] outline-none"
+                          className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 text-[#111111] dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:border-[#C6A667] outline-none"
                           placeholder="مثال: طقم شبكة عروس عيار 21"
                         />
                       </div>
 
                       <div>
-                        <label className="block text-stone-400 mb-1">كود المنتج (فريد) *</label>
+                        <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">كود المنتج (فريد) *</label>
                         <input
                           type="text"
                           required
                           value={formCode}
                           onChange={(e) => setFormCode(e.target.value)}
-                          className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 font-mono text-white focus:border-[#D4AF37] outline-none uppercase"
+                          className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 font-mono text-[#111111] dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:border-[#C6A667] outline-none uppercase"
                           placeholder="مثال: BGL-2105"
                         />
                       </div>
 
                       <div>
-                        <label className="block text-stone-400 mb-1">التصنيف *</label>
+                        <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">التصنيف *</label>
                         <select
                           value={formCategory}
                           onChange={(e) => setFormCategory(e.target.value)}
-                          className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 text-white focus:border-[#D4AF37] outline-none"
+                          className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 text-[#111111] dark:text-white focus:border-[#C6A667] outline-none"
                         >
                           {categories
                             .filter((c) => c.id !== 'all')
@@ -1386,11 +1511,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
 
                       <div>
-                        <label className="block text-stone-400 mb-1">العيار *</label>
+                        <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">العيار *</label>
                         <select
                           value={formKarat}
                           onChange={(e) => setFormKarat(Number(e.target.value))}
-                          className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 text-white focus:border-[#D4AF37] outline-none"
+                          className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 text-[#111111] dark:text-white focus:border-[#C6A667] outline-none"
                         >
                           <option value={18}>عيار 18</option>
                           <option value={21}>عيار 21</option>
@@ -1399,24 +1524,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
 
                       <div>
-                        <label className="block text-stone-400 mb-1">الوزن بالجرام</label>
+                        <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">الوزن بالجرام</label>
                         <input
                           type="number"
                           step="0.01"
                           value={formWeight}
                           onChange={(e) => setFormWeight(e.target.value)}
-                          className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 font-mono text-white focus:border-[#D4AF37] outline-none"
+                          className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 font-mono text-[#111111] dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:border-[#C6A667] outline-none"
                           placeholder="مثال: 15.4"
                         />
                       </div>
 
                       <div>
-                        <label className="block text-stone-400 mb-1">السعر بالجنيه المصري</label>
+                        <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">السعر بالجنيه المصري</label>
                         <input
                           type="number"
                           value={formPrice}
                           onChange={(e) => setFormPrice(e.target.value)}
-                          className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 font-mono text-white focus:border-[#D4AF37] outline-none"
+                          className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 font-mono text-[#111111] dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:border-[#C6A667] outline-none"
                           placeholder="مثال: 60000"
                         />
                       </div>
@@ -1424,62 +1549,62 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                     {/* Toggles */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
-                      <label className="flex items-center gap-2 p-2.5 rounded-lg bg-[#1A1C24] border border-stone-800 cursor-pointer text-xs">
+                      <label className="flex items-center gap-2 p-2.5 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800 cursor-pointer text-xs">
                         <input
                           type="checkbox"
                           checked={formInStock}
                           onChange={(e) => setFormInStock(e.target.checked)}
-                          className="rounded text-[#D4AF37]"
+                          className="rounded accent-[#C6A667]"
                         />
-                        <span className="text-white">متوفر في المحل</span>
+                        <span className="text-[#111111] dark:text-[#FAF8F3] font-medium">متوفر في المحل</span>
                       </label>
 
-                      <label className="flex items-center gap-2 p-2.5 rounded-lg bg-[#1A1C24] border border-stone-800 cursor-pointer text-xs">
+                      <label className="flex items-center gap-2 p-2.5 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800 cursor-pointer text-xs">
                         <input
                           type="checkbox"
                           checked={formHidePrice}
                           onChange={(e) => setFormHidePrice(e.target.checked)}
-                          className="rounded text-[#D4AF37]"
+                          className="rounded accent-[#C6A667]"
                         />
-                        <span className="text-white">إخفاء السعر (اسأل عنه)</span>
+                        <span className="text-[#111111] dark:text-[#FAF8F3] font-medium">إخفاء السعر (اسأل عنه)</span>
                       </label>
 
-                      <label className="flex items-center gap-2 p-2.5 rounded-lg bg-[#1A1C24] border border-stone-800 cursor-pointer text-xs">
+                      <label className="flex items-center gap-2 p-2.5 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800 cursor-pointer text-xs">
                         <input
                           type="checkbox"
                           checked={formIsFeatured}
                           onChange={(e) => setFormIsFeatured(e.target.checked)}
-                          className="rounded text-[#D4AF37]"
+                          className="rounded accent-[#C6A667]"
                         />
-                        <span className="text-white">قطعة مميزة في الواجهة</span>
+                        <span className="text-[#111111] dark:text-[#FAF8F3] font-medium">قطعة مميزة في الواجهة</span>
                       </label>
 
-                      <label className="flex items-center gap-2 p-2.5 rounded-lg bg-[#1A1C24] border border-stone-800 cursor-pointer text-xs">
+                      <label className="flex items-center gap-2 p-2.5 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800 cursor-pointer text-xs">
                         <input
                           type="checkbox"
                           checked={formIsOffer}
                           onChange={(e) => setFormIsOffer(e.target.checked)}
-                          className="rounded text-[#D4AF37]"
+                          className="rounded accent-[#C6A667]"
                         />
-                        <span className="text-white">عرض خاص / خصم</span>
+                        <span className="text-[#111111] dark:text-[#FAF8F3] font-medium">عرض خاص / خصم</span>
                       </label>
                     </div>
 
                     {/* Images Section with Local Computer Upload */}
-                    <div className="space-y-3 p-4 rounded-xl bg-[#1A1C24] border border-stone-800">
+                    <div className="space-y-3 p-4 rounded-xl bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                         <div>
-                          <label className="block text-sm font-bold text-[#FAF6ED]">
+                          <label className="block text-sm font-bold text-[#111111] dark:text-[#FAF8F3]">
                             صور القطعة ({currentImagesList.length})
                           </label>
-                          <span className="text-[11px] text-stone-400">
+                          <span className="text-[11px] text-stone-600 dark:text-stone-400">
                             الصورة الأولى هي صورة الغلاف الرئيسية في الموقع. يمكنك رفع صور من جهازك أو سحبها مباشرة.
                           </span>
                         </div>
 
                         <div className="flex items-center gap-2">
                           {/* File input button */}
-                          <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-[#D4AF37] hover:bg-[#F3E5AB] text-black font-bold text-xs cursor-pointer shadow-md transition-colors">
+                          <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-[#C6A667] hover:bg-[#B89347] text-[#111111] font-bold text-xs cursor-pointer shadow-xs transition-colors">
                             <Upload className="w-3.5 h-3.5" />
                             <span>رفع صور من الكمبيوتر</span>
                             <input
@@ -1500,7 +1625,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <button
                             type="button"
                             onClick={() => setShowManualUrlInput(!showManualUrlInput)}
-                            className="px-2.5 py-2 rounded-lg bg-[#252838] hover:bg-[#2F3347] text-stone-300 text-xs transition-colors cursor-pointer"
+                            className="px-2.5 py-2 rounded-lg bg-white dark:bg-[#1B1D25] hover:bg-[#EFE9DD] dark:hover:bg-[#232632] border border-[#E0D6C3] dark:border-stone-700 text-stone-700 dark:text-stone-300 text-xs transition-colors cursor-pointer"
                             title="إدخال روابط خارجية يدوياً"
                           >
                             {showManualUrlInput ? 'إخفاء الروابط' : 'روابط يدوية'}
@@ -1521,19 +1646,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             uploadFormImages(Array.from(e.dataTransfer.files));
                           }
                         }}
-                        className="border-2 border-dashed border-stone-700 hover:border-[#D4AF37]/60 rounded-xl p-4 text-center bg-[#13141B]/70 transition-colors"
+                        className="border-2 border-dashed border-[#D6C9B0] dark:border-stone-700 hover:border-[#C6A667] dark:hover:border-[#C6A667] rounded-xl p-4 text-center bg-white dark:bg-[#1B1D25] transition-colors"
                       >
-                        <p className="text-xs text-stone-300 font-medium">
+                        <p className="text-xs text-stone-700 dark:text-stone-300 font-medium">
                           اسحب صور الذهب وأفلتها هنا للرفع الفوري من جهازك
                         </p>
-                        <p className="text-[10px] text-stone-500 mt-1">
+                        <p className="text-[10px] text-stone-500 dark:text-stone-400 mt-1">
                           يدعم صور JPG, PNG, WEBP بدقة عالية
                         </p>
                       </div>
 
                       {/* Uploading indicator */}
                       {isUploadingFormImages && (
-                        <div className="p-2.5 rounded-lg bg-[#D4AF37]/15 border border-[#D4AF37]/30 text-[#D4AF37] text-xs flex items-center justify-center gap-2">
+                        <div className="p-2.5 rounded-lg bg-[#FDF8EC] dark:bg-[#201D17] border border-[#C6A667]/40 text-[#8A6A2E] dark:text-[#E2CCA1] text-xs flex items-center justify-center gap-2 font-medium">
                           <RefreshCw className="w-4 h-4 animate-spin" />
                           <span>جارٍ حفظ الصور على الخادم وإضافتها للقطعة...</span>
                         </div>
@@ -1546,8 +1671,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <div
                               key={`${imgUrl}-${idx}`}
                               className={`relative group rounded-lg overflow-hidden border ${
-                                idx === 0 ? 'border-[#D4AF37] ring-1 ring-[#D4AF37]' : 'border-stone-700'
-                              } bg-[#111217] aspect-square flex flex-col justify-between`}
+                                idx === 0 ? 'border-[#C6A667] ring-1 ring-[#C6A667]' : 'border-[#E0D6C3] dark:border-stone-700'
+                              } bg-white dark:bg-[#1B1D25] aspect-square flex flex-col justify-between`}
                             >
                               <img
                                 src={imgUrl}
@@ -1561,18 +1686,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                               {/* Cover Badge */}
                               {idx === 0 && (
-                                <div className="absolute top-1.5 right-1.5 px-2 py-0.5 rounded bg-[#D4AF37] text-black text-[10px] font-bold shadow">
+                                <div className="absolute top-1.5 right-1.5 px-2 py-0.5 rounded bg-[#C6A667] text-[#111111] text-[10px] font-bold shadow">
                                   الغلاف
                                 </div>
                               )}
 
                               {/* Hover Overlay Controls */}
-                              <div className="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1.5 p-2 text-[11px]">
+                              <div className="absolute inset-0 bg-black/65 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1.5 p-2 text-[11px]">
                                 {idx !== 0 && (
                                   <button
                                     type="button"
                                     onClick={() => handleSetCoverImage(idx)}
-                                    className="w-full py-1 px-2 rounded bg-[#D4AF37] hover:bg-[#F3E5AB] text-black font-bold text-[10px] transition-colors cursor-pointer"
+                                    className="w-full py-1 px-2 rounded bg-[#C6A667] hover:bg-[#E2CCA1] text-[#111111] font-bold text-[10px] transition-colors cursor-pointer"
                                   >
                                     جعله الغلاف
                                   </button>
@@ -1580,11 +1705,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => handleCopyUrl(imgUrl)}
-                                  className="w-full py-1 px-2 rounded bg-stone-700 hover:bg-stone-600 text-white text-[10px] transition-colors cursor-pointer flex items-center justify-center gap-1"
+                                  className="w-full py-1 px-2 rounded bg-white hover:bg-stone-100 text-[#111111] font-medium text-[10px] transition-colors cursor-pointer flex items-center justify-center gap-1"
                                 >
                                   {copiedUrl === imgUrl ? (
                                     <>
-                                      <Check className="w-3 h-3 text-emerald-400" />
+                                      <Check className="w-3 h-3 text-emerald-600" />
                                       <span>تم النسخ</span>
                                     </>
                                   ) : (
@@ -1597,7 +1722,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => handleRemoveFormImage(idx)}
-                                  className="w-full py-1 px-2 rounded bg-rose-900/80 hover:bg-rose-800 text-rose-200 text-[10px] transition-colors cursor-pointer flex items-center justify-center gap-1"
+                                  className="w-full py-1 px-2 rounded bg-rose-600 hover:bg-rose-500 text-white text-[10px] transition-colors cursor-pointer flex items-center justify-center gap-1"
                                 >
                                   <Trash2 className="w-3 h-3" />
                                   <span>حذف</span>
@@ -1607,22 +1732,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           ))}
                         </div>
                       ) : (
-                        <p className="text-xs text-stone-500 py-1">
+                        <p className="text-xs text-stone-500 dark:text-stone-400 py-1">
                           لم يتم إرفاق صور بعد. يرجى الضغط على زر "رفع صور من الكمبيوتر".
                         </p>
                       )}
 
                       {/* Optional Manual Textarea for Direct URLs */}
                       {showManualUrlInput && (
-                        <div className="pt-2 border-t border-stone-800 mt-2">
-                          <label className="block text-[11px] text-stone-400 mb-1">
+                        <div className="pt-2 border-t border-[#E8DEC9] dark:border-stone-800 mt-2">
+                          <label className="block text-[11px] text-stone-600 dark:text-stone-400 mb-1">
                             تعديل روابط الصور يدويًا (رابط في كل سطر):
                           </label>
                           <textarea
                             rows={3}
                             value={formImagesText}
                             onChange={(e) => setFormImagesText(e.target.value)}
-                            className="w-full bg-[#121319] border border-stone-700 rounded-lg p-2 font-mono text-xs text-stone-200 focus:border-[#D4AF37] outline-none"
+                            className="w-full bg-white dark:bg-[#1B1D25] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2 font-mono text-xs text-[#111111] dark:text-white focus:border-[#C6A667] outline-none"
                             placeholder="/uploads/...&#10;https://..."
                           />
                         </div>
@@ -1630,23 +1755,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
 
                     <div>
-                      <label className="block text-stone-400 mb-1">وصف مختصر للقطعة</label>
+                      <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">وصف مختصر للقطعة</label>
                       <textarea
                         rows={2}
                         value={formDescription}
                         onChange={(e) => setFormDescription(e.target.value)}
-                        className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 text-xs text-stone-200 focus:border-[#D4AF37] outline-none"
+                        className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 text-xs text-[#111111] dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:border-[#C6A667] outline-none"
                         placeholder="تفاصيل الصياغة، النقش، القفل، والدمغة..."
                       />
                     </div>
 
                     <div>
-                      <label className="block text-stone-400 mb-1">عنوان SEO (للأرشفة ومحركات البحث ومواقع التواصل)</label>
+                      <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">عنوان SEO (للأرشفة ومحركات البحث ومواقع التواصل)</label>
                       <input
                         type="text"
                         value={formSeoTitle}
                         onChange={(e) => setFormSeoTitle(e.target.value)}
-                        className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 text-xs text-white focus:border-[#D4AF37] outline-none"
+                        className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 text-xs text-[#111111] dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:border-[#C6A667] outline-none"
                         placeholder="مثال: خاتم سوليتير ذهب عيار 18 فخم للعرائس | سليمان جولد"
                       />
                     </div>
@@ -1654,7 +1779,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div className="flex items-center gap-3 pt-2">
                       <button
                         type="submit"
-                        className="px-6 py-2.5 rounded-lg bg-[#D4AF37] text-black font-bold text-xs hover:bg-[#F3E5AB] cursor-pointer flex items-center gap-1.5"
+                        className="px-6 py-2.5 rounded-lg bg-[#C6A667] text-[#111111] font-bold text-xs hover:bg-[#B89347] cursor-pointer flex items-center gap-1.5 shadow-sm"
                       >
                         <Save className="w-4 h-4" />
                         <span>{isAddingNew ? 'حفظ وإضافة للموقع' : 'تحديث بيانات المنتج'}</span>
@@ -1664,19 +1789,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 ) : (
                   <>
                     {/* Header and Fast Actions */}
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-[#14151C] p-4 rounded-xl border border-stone-800">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white dark:bg-[#1B1D25] p-4 rounded-xl border border-[#E8DEC9] dark:border-stone-800 shadow-xs">
                       <div>
                         <div className="flex items-center gap-2">
-                          <h4 className="text-sm font-bold text-[#FAF6ED]">
+                          <h4 className="text-sm font-bold text-[#111111] dark:text-[#FAF8F3]">
                             إدارة ورفع صور المنتجات ({products.length} قطعة)
                           </h4>
                           {products.length > 0 && (
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#D4AF37]/15 text-[#D4AF37] font-semibold border border-[#D4AF37]/30">
-                              {products.filter((p) => p.images && p.images.some((img) => img.startsWith('/uploads/'))).length} صورة مرفوعة من جهازك
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#FDF8EC] dark:bg-[#201D17] text-[#8A6A2E] dark:text-[#E2CCA1] font-bold border border-[#C6A667]/40">
+                              {products.filter((p) => p.images && p.images.some((img) => isCloudinaryOrUploadedImage(img))).length} صورة مرفوعة
                             </span>
                           )}
                         </div>
-                        <p className="text-[11px] text-stone-400 mt-0.5">
+                        <p className="text-[11px] text-stone-600 dark:text-stone-400 mt-0.5">
                           يمكنك رفع صورة خاصة لكل منتج مباشرة من جهاز الكمبيوتر بالنقر على أيقونة الكاميرا أو الزر المخصص.
                         </p>
                       </div>
@@ -1685,17 +1810,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <button
                           type="button"
                           onClick={() => setActiveTab('bulk')}
-                          className="px-3 py-2 rounded-lg bg-[#1B1D26] hover:bg-[#252836] text-[#D4AF37] border border-[#D4AF37]/40 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-sm transition-all"
+                          className="px-3 py-2 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] hover:bg-[#F4EFE6] dark:hover:bg-[#232632] text-[#8A6A2E] dark:text-[#E2CCA1] border border-[#C6A667]/50 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
                           title="استيراد الأصناف مباشرة من شيت إكسيل البرنامج"
                         >
-                          <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                          <FileSpreadsheet className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                           <span>استيراد شيت إكسيل</span>
                         </button>
 
                         <button
                           type="button"
                           onClick={openNewProductForm}
-                          className="px-3.5 py-2 rounded-lg bg-[#D4AF37] hover:bg-[#F3E5AB] text-black font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
+                          className="px-3.5 py-2 rounded-lg bg-[#C6A667] hover:bg-[#B89347] text-[#111111] font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-sm transition-all"
                         >
                           <Plus className="w-4 h-4" />
                           <span>إضافة قطعة يدوياً</span>
@@ -1705,20 +1830,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <button
                             type="button"
                             onClick={() => setShowClearAllConfirmModal(true)}
-                            className="px-3.5 py-2 rounded-lg bg-rose-950/60 hover:bg-rose-900 text-rose-300 hover:text-white border border-rose-800/60 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-sm transition-all"
+                            className="px-3.5 py-2 rounded-lg bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-600 dark:hover:bg-rose-600 text-rose-700 dark:text-rose-300 hover:text-white dark:hover:text-white border border-rose-200 dark:border-rose-800 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
                             title="مسح وتفريغ كافة المنتجات من المتجر نهائياً"
                           >
-                            <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                            <Trash2 className="w-3.5 h-3.5" />
                             <span>مسح كل المنتجات ({products.length})</span>
                           </button>
                         ) : (
                           <button
                             type="button"
                             onClick={handleRestoreDefaultProducts}
-                            className="px-3.5 py-2 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white border border-stone-700 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                            className="px-3.5 py-2 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] hover:bg-[#EFE9DD] dark:hover:bg-[#232632] text-stone-700 dark:text-stone-300 hover:text-[#111111] dark:hover:text-white border border-[#E0D6C3] dark:border-stone-700 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
                             title="استعادة المنتجات التجريبية الافتراضية"
                           >
-                            <RotateCcw className="w-3.5 h-3.5 text-[#D4AF37]" />
+                            <RotateCcw className="w-3.5 h-3.5 text-[#8A6A2E] dark:text-[#C6A667]" />
                             <span>استعادة المنتجات التجريبية</span>
                           </button>
                         )}
@@ -1726,29 +1851,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
 
                     {/* Filter and View Mode Toolbar */}
-                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-[#111217] p-3 rounded-xl border border-stone-800/80">
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white dark:bg-[#1B1D25] p-3 rounded-xl border border-[#E8DEC9] dark:border-stone-800 shadow-xs">
                       
                       {/* Search & Photo Filter Pills */}
                       <div className="flex flex-wrap items-center gap-2 flex-1">
                         <div className="relative w-full sm:w-56">
-                          <Search className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-stone-400" />
+                          <Search className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 dark:text-stone-500" />
                           <input
                             type="text"
                             value={productSearchQuery}
                             onChange={(e) => setProductSearchQuery(e.target.value)}
                             placeholder="بحث بالاسم أو الكود..."
-                            className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg pr-8 pl-3 py-1.5 text-xs text-white placeholder-stone-500 focus:border-[#D4AF37] outline-none"
+                            className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg pr-8 pl-3 py-1.5 text-xs text-[#111111] dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:border-[#C6A667] outline-none"
                           />
                         </div>
 
-                        <div className="flex items-center gap-1 p-1 bg-[#181922] rounded-lg border border-stone-800 text-xs">
+                        <div className="flex items-center gap-1 p-1 bg-[#FAF8F3] dark:bg-[#121319] rounded-lg border border-[#E8DEC9] dark:border-stone-800 text-xs">
                           <button
                             type="button"
                             onClick={() => setProductPhotoFilter('all')}
                             className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer ${
                               productPhotoFilter === 'all'
-                                ? 'bg-[#D4AF37] text-black font-bold'
-                                : 'text-stone-400 hover:text-white'
+                                ? 'bg-[#C6A667] text-[#111111] font-bold'
+                                : 'text-stone-600 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white'
                             }`}
                           >
                             الكل ({products.length})
@@ -1759,11 +1884,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             onClick={() => setProductPhotoFilter('needsPhoto')}
                             className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer ${
                               productPhotoFilter === 'needsPhoto'
-                                ? 'bg-amber-500 text-black font-bold'
-                                : 'text-amber-400/80 hover:text-amber-300'
+                                ? 'bg-amber-500 text-[#111111] font-bold'
+                                : 'text-amber-700 dark:text-amber-400 hover:text-amber-900 dark:hover:text-amber-200'
                             }`}
                           >
-                            بحاجة لصورة ({products.filter((p) => !p.images || !p.images.some((img) => img.startsWith('/uploads/'))).length})
+                            بحاجة لصورة ({products.filter((p) => !p.images || !p.images.some((img) => isCloudinaryOrUploadedImage(img))).length})
                           </button>
 
                           <button
@@ -1771,24 +1896,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             onClick={() => setProductPhotoFilter('hasPhoto')}
                             className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer ${
                               productPhotoFilter === 'hasPhoto'
-                                ? 'bg-emerald-500 text-black font-bold'
-                                : 'text-emerald-400/80 hover:text-emerald-300'
+                                ? 'bg-emerald-600 text-white font-bold'
+                                : 'text-emerald-700 dark:text-emerald-400 hover:text-emerald-900 dark:hover:text-emerald-200'
                             }`}
                           >
-                            تم رفع صورة ({products.filter((p) => p.images && p.images.some((img) => img.startsWith('/uploads/'))).length})
+                            تم رفع صورة ({products.filter((p) => p.images && p.images.some((img) => isCloudinaryOrUploadedImage(img))).length})
                           </button>
                         </div>
                       </div>
 
                       {/* View Mode Toggle */}
-                      <div className="flex items-center gap-1 bg-[#181922] p-1 rounded-lg border border-stone-800 shrink-0 self-end lg:self-auto">
+                      <div className="flex items-center gap-1 bg-[#FAF8F3] dark:bg-[#121319] p-1 rounded-lg border border-[#E8DEC9] dark:border-stone-800 shrink-0 self-end lg:self-auto">
                         <button
                           type="button"
                           onClick={() => setProductsViewMode('table')}
                           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
                             productsViewMode === 'table'
-                              ? 'bg-[#282B3B] text-white shadow'
-                              : 'text-stone-400 hover:text-stone-200'
+                              ? 'bg-white dark:bg-[#1B1D25] text-[#111111] dark:text-[#FAF8F3] border border-[#E0D6C3] dark:border-stone-700 shadow-xs'
+                              : 'text-stone-600 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white'
                           }`}
                         >
                           <List className="w-3.5 h-3.5" />
@@ -1800,8 +1925,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           onClick={() => setProductsViewMode('photoGrid')}
                           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
                             productsViewMode === 'photoGrid'
-                              ? 'bg-[#D4AF37] text-black shadow font-bold'
-                              : 'text-stone-400 hover:text-stone-200'
+                              ? 'bg-[#C6A667] text-[#111111] shadow-xs font-bold'
+                              : 'text-stone-600 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white'
                           }`}
                         >
                           <Grid className="w-3.5 h-3.5" />
@@ -1813,13 +1938,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                     {/* Empty State when no products exist */}
                     {products.length === 0 ? (
-                      <div className="p-12 text-center rounded-2xl bg-[#14151C] border border-stone-800 space-y-4">
-                        <div className="w-16 h-16 rounded-full bg-[#D4AF37]/10 border border-[#D4AF37]/20 flex items-center justify-center mx-auto text-[#D4AF37]">
+                      <div className="p-12 text-center rounded-2xl bg-white dark:bg-[#1B1D25] border border-[#E8DEC9] dark:border-stone-800 shadow-xs space-y-4">
+                        <div className="w-16 h-16 rounded-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#C6A667]/40 flex items-center justify-center mx-auto text-[#8A6A2E] dark:text-[#C6A667]">
                           <Layers className="w-8 h-8" />
                         </div>
                         <div className="space-y-1">
-                          <h4 className="text-base font-bold text-white">الكتالوج فارغ حالياً (0 منتج)</h4>
-                          <p className="text-xs text-stone-400 max-w-md mx-auto">
+                          <h4 className="text-base font-bold text-[#111111] dark:text-[#FAF8F3]">الكتالوج فارغ حالياً (0 منتج)</h4>
+                          <p className="text-xs text-stone-600 dark:text-stone-400 max-w-md mx-auto">
                             تم تفريغ كافة المنتجات بنجاح. يمكنك الآن استيراد شيت إكسيل جديد خاص ببرنامجك، أو إضافة قطع يدوياً، أو استعادة المنتجات التجريبية.
                           </p>
                         </div>
@@ -1827,16 +1952,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <button
                             type="button"
                             onClick={() => setActiveTab('bulk')}
-                            className="px-5 py-2.5 rounded-xl bg-[#D4AF37] hover:bg-[#F3E5AB] text-black font-bold text-xs flex items-center gap-2 cursor-pointer shadow-md transition-all"
+                            className="px-5 py-2.5 rounded-xl bg-[#C6A667] hover:bg-[#B89347] text-[#111111] font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm transition-all"
                           >
-                            <FileSpreadsheet className="w-4 h-4 text-emerald-950" />
+                            <FileSpreadsheet className="w-4 h-4 text-emerald-900" />
                             <span>استيراد شيت إكسيل الآن</span>
                           </button>
 
                           <button
                             type="button"
                             onClick={openNewProductForm}
-                            className="px-4 py-2.5 rounded-xl bg-[#1B1D26] hover:bg-[#252836] text-white border border-stone-700 font-semibold text-xs flex items-center gap-2 cursor-pointer transition-colors"
+                            className="px-4 py-2.5 rounded-xl bg-[#FAF8F3] dark:bg-[#121319] hover:bg-[#EFE9DD] dark:hover:bg-[#232632] text-[#111111] dark:text-[#FAF8F3] border border-[#E0D6C3] dark:border-stone-700 font-semibold text-xs flex items-center gap-2 cursor-pointer transition-colors"
                           >
                             <Plus className="w-4 h-4" />
                             <span>إضافة قطعة يدوياً</span>
@@ -1845,9 +1970,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <button
                             type="button"
                             onClick={handleRestoreDefaultProducts}
-                            className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-white border border-stone-800 text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
+                            className="px-4 py-2.5 rounded-xl bg-white dark:bg-[#1B1D25] hover:bg-[#FAF8F3] dark:hover:bg-[#232632] text-stone-700 dark:text-stone-300 hover:text-[#111111] dark:hover:text-white border border-[#E8DEC9] dark:border-stone-700 text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
                           >
-                            <RotateCcw className="w-4 h-4 text-[#D4AF37]" />
+                            <RotateCcw className="w-4 h-4 text-[#8A6A2E] dark:text-[#C6A667]" />
                             <span>استعادة المنتجات التجريبية</span>
                           </button>
                         </div>
@@ -1856,9 +1981,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <>
                         {/* View 1: Table View */}
                         {productsViewMode === 'table' && (
-                      <div className="rounded-xl border border-stone-800 overflow-hidden bg-[#131419]">
+                      <div className="rounded-xl border border-[#E8DEC9] dark:border-stone-800 overflow-hidden bg-white dark:bg-[#1B1D25] shadow-xs overflow-x-auto">
                         <table className="w-full text-right text-xs">
-                          <thead className="bg-[#181920] text-stone-400 border-b border-stone-800">
+                          <thead className="bg-[#F4EFE6] dark:bg-[#191B23] text-stone-700 dark:text-stone-300 border-b border-[#E8DEC9] dark:border-stone-800 font-bold">
                             <tr>
                               <th className="p-3">صورة المنتج (انقر للرفع)</th>
                               <th className="p-3">اسم المنتج</th>
@@ -1869,29 +1994,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <th className="p-3 text-center">إجراءات</th>
                             </tr>
                           </thead>
-                          <tbody className="divide-y divide-stone-800/80">
+                          <tbody className="divide-y divide-[#EFE9DD] dark:divide-stone-800/70">
                             {products
                               .filter((p) => {
                                 const q = productSearchQuery.toLowerCase();
                                 const matchesSearch =
                                   !q || p.name.toLowerCase().includes(q) || p.code.toLowerCase().includes(q);
                                 if (!matchesSearch) return false;
-                                const isUploaded = p.images && p.images.some((img) => img.startsWith('/uploads/'));
+                                const isUploaded = p.images && p.images.some((img) => isCloudinaryOrUploadedImage(img));
                                 if (productPhotoFilter === 'needsPhoto') return !isUploaded;
                                 if (productPhotoFilter === 'hasPhoto') return isUploaded;
                                 return true;
                               })
                               .map((p) => {
-                                const isUploaded = p.images && p.images.some((img) => img.startsWith('/uploads/'));
+                                const isUploaded = p.images && p.images.some((img) => isCloudinaryOrUploadedImage(img));
                                 const isCurrentlyUploading = uploadingProductId === p.id;
+                                const imageCount = Array.isArray(p.images) ? p.images.length : 0;
 
                                 return (
-                                  <tr key={p.id} className="hover:bg-[#1A1C23] transition-colors">
-                                    {/* Thumbnail with 1-click Local PC File Upload */}
+                                  <tr key={p.id} className="hover:bg-[#FAF8F3] dark:hover:bg-[#1F212B] transition-colors">
+                                    {/* Thumbnail with 1-click Cloudinary Upload */}
                                     <td className="p-3">
                                       <label
-                                        className="relative group cursor-pointer block w-12 h-12 rounded-lg overflow-hidden bg-black/60 shrink-0 border border-stone-700 hover:border-[#D4AF37] transition-all shadow"
-                                        title="انقر لرفع صورة لهذا المنتج من الكمبيوتر مباشرة"
+                                        className={`relative group block w-12 h-12 rounded-lg overflow-hidden bg-[#F4F1EA] dark:bg-[#121319] shrink-0 border border-[#E0D6C3] dark:border-stone-700 transition-all shadow-xs ${
+                                          canUploadProductImages ? 'cursor-pointer hover:border-[#C6A667]' : 'cursor-not-allowed opacity-80'
+                                        }`}
+                                        title={
+                                          canUploadProductImages
+                                            ? 'انقر لاستبدال صورة الغلاف من الكمبيوتر (JPG, PNG, WebP بحد أقصى 5 MB)'
+                                            : 'متاح لحساب المدير المصادق عليه عبر Firebase فقط'
+                                        }
                                       >
                                         <img
                                           src={p.images[0]}
@@ -1903,58 +2035,66 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                           }}
                                         />
 
-                                        {isCurrentlyUploading ? (
-                                          <div className="absolute inset-0 bg-black/80 flex items-center justify-center">
-                                            <RefreshCw className="w-5 h-5 text-[#D4AF37] animate-spin" />
-                                          </div>
-                                        ) : (
-                                          <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white">
-                                            <Camera className="w-4 h-4 text-[#D4AF37]" />
-                                            <span className="text-[8px] text-stone-200 mt-0.5">رفع</span>
-                                          </div>
+                                        {imageCount > 1 && (
+                                          <span className="absolute bottom-0.5 right-0.5 px-1 rounded bg-black/75 text-white text-[9px] font-mono font-bold">
+                                            {imageCount}
+                                          </span>
                                         )}
 
-                                        <input
-                                          type="file"
-                                          accept="image/*"
-                                          disabled={isCurrentlyUploading}
-                                          onChange={(e) => {
-                                            if (e.target.files && e.target.files[0]) {
-                                              handleDirectProductImageUpload(p, e.target.files[0]);
-                                              e.target.value = '';
-                                            }
-                                          }}
-                                          className="hidden"
-                                        />
+                                        {isCurrentlyUploading ? (
+                                          <div className="absolute inset-0 bg-white/85 dark:bg-black/80 flex items-center justify-center">
+                                            <RefreshCw className="w-5 h-5 text-[#8A6A2E] dark:text-[#C6A667] animate-spin" />
+                                          </div>
+                                        ) : canUploadProductImages ? (
+                                          <div className="absolute inset-0 bg-black/55 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white">
+                                            <Camera className="w-4 h-4 text-[#E2CCA1]" />
+                                            <span className="text-[8px] text-white mt-0.5">استبدال</span>
+                                          </div>
+                                        ) : null}
+
+                                        {canUploadProductImages && (
+                                          <input
+                                            type="file"
+                                            accept={CLOUDINARY_PRODUCT_ACCEPT}
+                                            disabled={isCurrentlyUploading}
+                                            onChange={(e) => {
+                                              if (e.target.files && e.target.files[0]) {
+                                                handleDirectProductImageUpload(p, e.target.files[0], 'replace');
+                                                e.target.value = '';
+                                              }
+                                            }}
+                                            className="hidden"
+                                          />
+                                        )}
                                       </label>
                                     </td>
 
                                     <td className="p-3">
-                                      <span className="font-semibold text-white truncate max-w-xs block">
+                                      <span className="font-bold text-[#111111] dark:text-[#FAF8F3] truncate max-w-xs block">
                                         {p.name}
                                       </span>
                                     </td>
 
-                                    <td className="p-3 font-mono text-[#D4AF37] font-bold">
+                                    <td className="p-3 font-mono text-[#8A6A2E] dark:text-[#C6A667] font-bold">
                                       #{p.code}
                                     </td>
 
-                                    <td className="p-3 text-stone-300">
+                                    <td className="p-3 text-stone-700 dark:text-stone-300">
                                       عيار {p.karat} · {p.weight} جم
                                     </td>
 
-                                    <td className="p-3 font-mono font-bold text-stone-200">
+                                    <td className="p-3 font-mono font-bold text-[#111111] dark:text-[#FAF8F3]">
                                       {p.hidePrice ? 'مخفي (اسأل)' : formatCurrency(p.price, settings.currency)}
                                     </td>
 
                                     <td className="p-3">
                                       {isUploaded ? (
-                                        <span className="inline-flex items-center gap-1 text-emerald-400 bg-emerald-950/60 border border-emerald-800/40 px-2 py-0.5 rounded text-[10px] font-medium">
+                                        <span className="inline-flex items-center gap-1 text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/60 px-2 py-0.5 rounded text-[10px] font-medium">
                                           <Check className="w-3 h-3" />
-                                          <span>مرفوعة من جهازك</span>
+                                          <span>{imageCount > 1 ? `مرفوعة (${imageCount} صور)` : 'مرفوعة على Cloudinary'}</span>
                                         </span>
                                       ) : (
-                                        <span className="inline-flex items-center gap-1 text-amber-400 bg-amber-950/60 border border-amber-800/40 px-2 py-0.5 rounded text-[10px] font-medium">
+                                        <span className="inline-flex items-center gap-1 text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/50 px-2 py-0.5 rounded text-[10px] font-medium">
                                           <span>افتراضية (تحتاج صورة)</span>
                                         </span>
                                       )}
@@ -1962,34 +2102,67 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                                     <td className="p-3 text-center">
                                       <div className="flex items-center justify-center gap-1.5">
-                                        {/* Direct Photo Upload Button */}
-                                        <label
-                                          className="px-2.5 py-1.5 rounded-lg bg-[#D4AF37]/15 hover:bg-[#D4AF37] text-[#D4AF37] hover:text-black font-semibold text-[11px] cursor-pointer flex items-center gap-1 transition-colors border border-[#D4AF37]/30"
-                                          title="رفع صورة من الكمبيوتر لهذا المنتج"
-                                        >
-                                          {isCurrentlyUploading ? (
-                                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                                          ) : (
-                                            <Camera className="w-3.5 h-3.5" />
-                                          )}
-                                          <span>رفع صورة</span>
-                                          <input
-                                            type="file"
-                                            accept="image/*"
-                                            disabled={isCurrentlyUploading}
-                                            onChange={(e) => {
-                                              if (e.target.files && e.target.files[0]) {
-                                                handleDirectProductImageUpload(p, e.target.files[0]);
-                                                e.target.value = '';
-                                              }
-                                            }}
-                                            className="hidden"
-                                          />
-                                        </label>
+                                        {/* Direct Photo Upload Button (Replace primary image) */}
+                                        {canUploadProductImages && (
+                                          <>
+                                            <label
+                                              className={`px-2.5 py-1.5 rounded-lg bg-[#FDF8EC] dark:bg-[#201D17] hover:bg-[#C6A667] dark:hover:bg-[#C6A667] text-[#8A6A2E] dark:text-[#E2CCA1] hover:text-[#111111] dark:hover:text-[#111111] font-bold text-[11px] flex items-center gap-1 transition-colors border border-[#C6A667]/50 ${
+                                                isCurrentlyUploading ? 'opacity-60 cursor-wait' : 'cursor-pointer'
+                                              }`}
+                                              title="رفع / استبدال صورة الغلاف للمنتج (JPG, PNG, WebP بحد أقصى 5 MB)"
+                                            >
+                                              {isCurrentlyUploading ? (
+                                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                              ) : (
+                                                <Camera className="w-3.5 h-3.5" />
+                                              )}
+                                              <span>{isCurrentlyUploading ? 'جارٍ الرفع...' : 'رفع صورة'}</span>
+                                              <input
+                                                type="file"
+                                                accept={CLOUDINARY_PRODUCT_ACCEPT}
+                                                disabled={isCurrentlyUploading}
+                                                onChange={(e) => {
+                                                  if (e.target.files && e.target.files[0]) {
+                                                    handleDirectProductImageUpload(p, e.target.files[0], 'replace');
+                                                    e.target.value = '';
+                                                  }
+                                                }}
+                                                className="hidden"
+                                              />
+                                            </label>
+
+                                            <label
+                                              className={`px-2 py-1.5 rounded-lg bg-white dark:bg-[#1B1D25] hover:bg-[#EFE9DD] dark:hover:bg-[#2A2D39] text-stone-700 dark:text-stone-300 hover:text-[#8A6A2E] dark:hover:text-[#E2CCA1] font-semibold text-[11px] flex items-center gap-1 transition-colors border border-[#E0D6C3] dark:border-stone-700 ${
+                                                isCurrentlyUploading ? 'opacity-60 cursor-wait' : 'cursor-pointer'
+                                              }`}
+                                              title="إضافة صورة أو أكثر لمعرض المنتج دون حذف الصور الحالية"
+                                            >
+                                              <Plus className="w-3 h-3" />
+                                              <span>إضافة</span>
+                                              <input
+                                                type="file"
+                                                multiple
+                                                accept={CLOUDINARY_PRODUCT_ACCEPT}
+                                                disabled={isCurrentlyUploading}
+                                                onChange={(e) => {
+                                                  if (e.target.files && e.target.files.length > 0) {
+                                                    handleDirectProductImageUpload(
+                                                      p,
+                                                      Array.from(e.target.files),
+                                                      'append'
+                                                    );
+                                                    e.target.value = '';
+                                                  }
+                                                }}
+                                                className="hidden"
+                                              />
+                                            </label>
+                                          </>
+                                        )}
 
                                         <button
                                           onClick={() => openEditProduct(p)}
-                                          className="p-1.5 rounded hover:bg-stone-700 text-stone-300 hover:text-[#D4AF37] transition-colors"
+                                          className="p-1.5 rounded hover:bg-[#EFE9DD] dark:hover:bg-[#2A2D39] text-stone-600 dark:text-stone-400 hover:text-[#8A6A2E] dark:hover:text-[#E2CCA1] transition-colors cursor-pointer"
                                           title="تعديل تفاصيل الصنف"
                                         >
                                           <Edit2 className="w-4 h-4" />
@@ -1997,7 +2170,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                                         <button
                                           onClick={() => handleDeleteProduct(p.id, p.name)}
-                                          className="p-1.5 rounded hover:bg-red-900/30 text-stone-400 hover:text-red-400 transition-colors"
+                                          className="p-1.5 rounded hover:bg-rose-50 dark:hover:bg-rose-950/50 text-stone-500 dark:text-stone-400 hover:text-rose-600 dark:hover:text-rose-400 transition-colors cursor-pointer"
                                           title="حذف الصنف"
                                         >
                                           <Trash2 className="w-4 h-4" />
@@ -2021,43 +2194,52 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             const matchesSearch =
                               !q || p.name.toLowerCase().includes(q) || p.code.toLowerCase().includes(q);
                             if (!matchesSearch) return false;
-                            const isUploaded = p.images && p.images.some((img) => img.startsWith('/uploads/'));
+                            const isUploaded = p.images && p.images.some((img) => isCloudinaryOrUploadedImage(img));
                             if (productPhotoFilter === 'needsPhoto') return !isUploaded;
                             if (productPhotoFilter === 'hasPhoto') return isUploaded;
                             return true;
                           })
                           .map((p) => {
-                            const isUploaded = p.images && p.images.some((img) => img.startsWith('/uploads/'));
+                            const isUploaded = p.images && p.images.some((img) => isCloudinaryOrUploadedImage(img));
                             const isCurrentlyUploading = uploadingProductId === p.id;
+                            const imageCount = Array.isArray(p.images) ? p.images.length : 0;
 
                             return (
                               <div
                                 key={p.id}
                                 onDragOver={(e) => {
+                                  if (!canUploadProductImages) return;
                                   e.preventDefault();
                                   e.stopPropagation();
                                 }}
                                 onDrop={(e) => {
+                                  if (!canUploadProductImages) return;
                                   e.preventDefault();
                                   e.stopPropagation();
-                                  if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-                                    handleDirectProductImageUpload(p, e.dataTransfer.files[0]);
+                                  if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                                    handleDirectProductImageUpload(
+                                      p,
+                                      Array.from(e.dataTransfer.files),
+                                      isUploaded ? 'append' : 'replace'
+                                    );
                                   }
                                 }}
-                                className={`rounded-2xl p-4 bg-[#14151C] border ${
-                                  isUploaded ? 'border-stone-800' : 'border-amber-700/40 bg-amber-950/10'
-                                } hover:border-[#D4AF37]/60 transition-all flex flex-col justify-between space-y-3 group`}
+                                className={`rounded-2xl p-4 border shadow-xs ${
+                                  isUploaded
+                                    ? 'bg-white dark:bg-[#1B1D25] border-[#E8DEC9] dark:border-stone-800'
+                                    : 'bg-amber-50/40 dark:bg-amber-950/20 border-amber-300 dark:border-amber-800/60'
+                                } hover:border-[#C6A667] transition-all flex flex-col justify-between space-y-3 group`}
                               >
                                 {/* Header with code and karat */}
                                 <div className="flex items-center justify-between text-xs">
-                                  <span className="font-mono text-[#D4AF37] font-bold">#{p.code}</span>
-                                  <span className="px-2 py-0.5 rounded bg-stone-800 text-stone-300 text-[10px]">
+                                  <span className="font-mono text-[#8A6A2E] dark:text-[#C6A667] font-bold">#{p.code}</span>
+                                  <span className="px-2 py-0.5 rounded bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-700 text-stone-700 dark:text-stone-300 text-[10px] font-medium">
                                     عيار {p.karat} · {p.weight} جم
                                   </span>
                                 </div>
 
                                 {/* Main Photo with Drag & Drop Zone */}
-                                <div className="relative aspect-square rounded-xl overflow-hidden bg-black/50 border border-stone-700/80">
+                                <div className="relative aspect-square rounded-xl overflow-hidden bg-[#F4F1EA] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800">
                                   <img
                                     src={p.images[0]}
                                     alt={p.name}
@@ -2069,21 +2251,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   />
 
                                   {/* Badge on Photo */}
-                                  <div className="absolute top-2 right-2">
+                                  <div className="absolute top-2 right-2 flex items-center gap-1">
                                     {isUploaded ? (
-                                      <span className="px-2 py-0.5 rounded bg-emerald-950/90 border border-emerald-500/50 text-emerald-300 text-[10px] font-bold shadow flex items-center gap-1">
+                                      <span className="px-2 py-0.5 rounded bg-white/95 dark:bg-black/80 border border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold shadow-xs flex items-center gap-1">
                                         <Check className="w-3 h-3" />
-                                        <span>صورة جهازك</span>
+                                        <span>{imageCount > 1 ? `${imageCount} صور` : 'صورة مرفوعة'}</span>
                                       </span>
                                     ) : (
-                                      <span className="px-2 py-0.5 rounded bg-amber-950/90 border border-amber-500/50 text-amber-300 text-[10px] font-bold shadow">
+                                      <span className="px-2 py-0.5 rounded bg-white/95 dark:bg-black/80 border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300 text-[10px] font-bold shadow-xs">
                                         تحتاج صورة
                                       </span>
                                     )}
                                   </div>
 
                                   {isCurrentlyUploading && (
-                                    <div className="absolute inset-0 bg-black/85 flex flex-col items-center justify-center gap-2 text-[#D4AF37] text-xs">
+                                    <div className="absolute inset-0 bg-white/85 dark:bg-black/80 flex flex-col items-center justify-center gap-2 text-[#8A6A2E] dark:text-[#E2CCA1] text-xs font-bold">
                                       <RefreshCw className="w-6 h-6 animate-spin" />
                                       <span>جارٍ رفع الصورة...</span>
                                     </div>
@@ -2092,40 +2274,66 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                                 {/* Title & Price */}
                                 <div>
-                                  <h5 className="font-semibold text-white text-xs line-clamp-2" title={p.name}>
+                                  <h5 className="font-bold text-[#111111] dark:text-[#FAF8F3] text-xs line-clamp-2" title={p.name}>
                                     {p.name}
                                   </h5>
-                                  <p className="text-[#D4AF37] font-mono font-bold text-xs mt-1">
+                                  <p className="text-[#8A6A2E] dark:text-[#C6A667] font-mono font-bold text-xs mt-1">
                                     {p.hidePrice ? 'السعر مخفي (واتساب)' : formatCurrency(p.price, settings.currency)}
                                   </p>
                                 </div>
 
-                                {/* Direct Computer File Upload Button */}
-                                <div className="pt-1">
-                                  <label className="w-full py-2.5 px-3 rounded-xl bg-[#D4AF37] hover:bg-[#F3E5AB] text-black font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-md transition-colors">
-                                    <Camera className="w-4 h-4" />
-                                    <span>{isUploaded ? 'تغيير الصورة من الكمبيوتر' : 'رفع صورة من الكمبيوتر'}</span>
-                                    <input
-                                      type="file"
-                                      accept="image/*"
-                                      disabled={isCurrentlyUploading}
-                                      onChange={(e) => {
-                                        if (e.target.files && e.target.files[0]) {
-                                          handleDirectProductImageUpload(p, e.target.files[0]);
-                                          e.target.value = '';
-                                        }
-                                      }}
-                                      className="hidden"
-                                    />
-                                  </label>
-                                </div>
+                                {/* Direct Computer File Upload Buttons */}
+                                {canUploadProductImages && (
+                                  <div className="pt-1 flex items-center gap-1.5">
+                                    <label className="flex-1 py-2 px-2.5 rounded-xl bg-[#C6A667] hover:bg-[#B89347] text-[#111111] font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors">
+                                      <Camera className="w-4 h-4" />
+                                      <span>{isUploaded ? 'استبدال الصورة' : 'رفع صورة'}</span>
+                                      <input
+                                        type="file"
+                                        accept={CLOUDINARY_PRODUCT_ACCEPT}
+                                        disabled={isCurrentlyUploading}
+                                        onChange={(e) => {
+                                          if (e.target.files && e.target.files[0]) {
+                                            handleDirectProductImageUpload(p, e.target.files[0], 'replace');
+                                            e.target.value = '';
+                                          }
+                                        }}
+                                        className="hidden"
+                                      />
+                                    </label>
+                                    <label
+                                      className="py-2 px-2.5 rounded-xl bg-[#FAF8F3] dark:bg-[#121319] hover:bg-[#EFE9DD] dark:hover:bg-[#232632] border border-[#E0D6C3] dark:border-stone-700 text-stone-700 dark:text-stone-300 font-bold text-xs flex items-center justify-center gap-1 cursor-pointer transition-colors"
+                                      title="إضافة صور إضافية للمنتج"
+                                    >
+                                      <Plus className="w-3.5 h-3.5" />
+                                      <span>إضافة</span>
+                                      <input
+                                        type="file"
+                                        multiple
+                                        accept={CLOUDINARY_PRODUCT_ACCEPT}
+                                        disabled={isCurrentlyUploading}
+                                        onChange={(e) => {
+                                          if (e.target.files && e.target.files.length > 0) {
+                                            handleDirectProductImageUpload(
+                                              p,
+                                              Array.from(e.target.files),
+                                              'append'
+                                            );
+                                            e.target.value = '';
+                                          }
+                                        }}
+                                        className="hidden"
+                                      />
+                                    </label>
+                                  </div>
+                                )}
 
                                 {/* Edit / Delete secondary actions */}
-                                <div className="flex items-center justify-between text-xs pt-1 border-t border-stone-800/80 text-stone-400">
+                                <div className="flex items-center justify-between text-xs pt-1 border-t border-[#EFE9DD] dark:border-stone-800 text-stone-600 dark:text-stone-400">
                                   <button
                                     type="button"
                                     onClick={() => openEditProduct(p)}
-                                    className="hover:text-white flex items-center gap-1 cursor-pointer"
+                                    className="hover:text-[#111111] dark:hover:text-white flex items-center gap-1 cursor-pointer"
                                   >
                                     <Edit2 className="w-3 h-3" />
                                     <span>تعديل التفاصيل</span>
@@ -2133,7 +2341,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => handleDeleteProduct(p.id, p.name)}
-                                    className="hover:text-rose-400 flex items-center gap-1 cursor-pointer"
+                                    className="hover:text-rose-600 dark:hover:text-rose-400 flex items-center gap-1 cursor-pointer"
                                   >
                                     <Trash2 className="w-3 h-3" />
                                     <span>حذف</span>
@@ -2151,23 +2359,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             {/* Confirmation Modal: Clear All Products */}
             {showClearAllConfirmModal && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-                <div className="bg-[#151720] border border-rose-600/50 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl text-right">
-                  <div className="flex items-center gap-3 border-b border-stone-800 pb-3">
-                    <div className="w-10 h-10 rounded-full bg-rose-950/80 border border-rose-700/60 flex items-center justify-center text-rose-400 shrink-0">
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 dark:bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
+                <div className="bg-white dark:bg-[#1B1D25] border border-rose-200 dark:border-rose-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl text-right text-[#1A1A1A] dark:text-[#FAF8F3]">
+                  <div className="flex items-center gap-3 border-b border-[#EFE9DD] dark:border-stone-800 pb-3">
+                    <div className="w-10 h-10 rounded-full bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 flex items-center justify-center text-rose-600 dark:text-rose-400 shrink-0">
                       <AlertTriangle className="w-5 h-5" />
                     </div>
                     <div>
-                      <h3 className="text-base font-bold text-white">تأكيد مسح كافة المنتجات</h3>
-                      <p className="text-xs text-rose-400 font-medium">إجراء نهائي لتفريغ الكتالوج بالكامل</p>
+                      <h3 className="text-base font-bold text-[#111111] dark:text-[#FAF8F3]">تأكيد مسح كافة المنتجات</h3>
+                      <p className="text-xs text-rose-600 dark:text-rose-400 font-medium">إجراء نهائي لتفريغ الكتالوج بالكامل</p>
                     </div>
                   </div>
 
-                  <div className="space-y-2 text-xs text-stone-300 leading-relaxed bg-[#101116] p-4 rounded-xl border border-stone-800/80">
+                  <div className="space-y-2 text-xs text-stone-700 dark:text-stone-300 leading-relaxed bg-[#FAF8F3] dark:bg-[#121319] p-4 rounded-xl border border-[#E8DEC9] dark:border-stone-800">
                     <p>
-                      أنت على وشك مسح جميع الأصناف والمنتجات المسجلة في المتجر بالكامل (عدد <strong className="text-rose-400 font-mono text-sm">{products.length}</strong> قطعة ذهب).
+                      أنت على وشك مسح جميع الأصناف والمنتجات المسجلة في المتجر بالكامل (عدد <strong className="text-rose-700 dark:text-rose-400 font-mono text-sm">{products.length}</strong> قطعة ذهب).
                     </p>
-                    <p className="text-stone-400 text-[11px]">
+                    <p className="text-stone-600 dark:text-stone-400 text-[11px]">
                       ⚠️ سيتم إفراغ الكتالوج تماماً ليصبح جاهزاً لرفع منتجاتك الخاصة أو استيراد ملف إكسيل جديد من برنامجك.
                     </p>
                   </div>
@@ -2177,7 +2385,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       type="button"
                       onClick={handleClearAllProducts}
                       disabled={isClearingAllProducts}
-                      className="w-full sm:flex-1 py-3 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-all shadow-lg shadow-rose-900/30 disabled:opacity-50"
+                      className="w-full sm:flex-1 py-3 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-all shadow-sm disabled:opacity-50"
                     >
                       {isClearingAllProducts ? (
                         <>
@@ -2196,7 +2404,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       type="button"
                       onClick={() => setShowClearAllConfirmModal(false)}
                       disabled={isClearingAllProducts}
-                      className="w-full sm:w-auto py-3 px-5 rounded-xl bg-[#222430] hover:bg-[#2C2F40] text-stone-300 hover:text-white text-xs font-semibold transition-colors cursor-pointer"
+                      className="w-full sm:w-auto py-3 px-5 rounded-xl bg-[#FAF8F3] dark:bg-[#121319] hover:bg-[#EFE9DD] dark:hover:bg-[#232632] border border-[#E0D6C3] dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:text-[#111111] dark:hover:text-white text-xs font-semibold transition-colors cursor-pointer"
                     >
                       إلغاء وتراجع
                     </button>
@@ -2211,17 +2419,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {/* Tab 2: Gold Prices Management with Auto-Calculation from 21k */}
             {activeTab === 'gold' && (
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                <div className="p-5 rounded-xl bg-[#14151B] border border-stone-800 space-y-5">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-800 pb-4">
+                <div className="p-5 rounded-xl bg-white dark:bg-[#1B1D25] border border-[#E8DEC9] dark:border-stone-800 shadow-xs space-y-5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E8DEC9] dark:border-stone-800 pb-4">
                     <div>
-                      <h4 className="text-sm font-bold text-[#FAF8F3]">تحديث أسعار الذهب وبورصة الصاغة</h4>
-                      <p className="text-xs text-stone-400 mt-1">
+                      <h4 className="text-sm font-bold text-[#111111] dark:text-[#FAF8F3]">تحديث أسعار الذهب وبورصة الصاغة</h4>
+                      <p className="text-xs text-stone-600 dark:text-stone-400 mt-1">
                         تعديل سعر عيار 21 يحسب باقي العيارات والجنيه الذهب تلقائيًا بالمعادلات الرسمية
                       </p>
                     </div>
 
                     {/* Auto Calculation Toggle */}
-                    <label className="flex items-center gap-2 p-2 rounded-lg bg-[#1B1B1B] border border-[#C6A667]/40 cursor-pointer text-xs font-semibold text-[#E2CCA1]">
+                    <label className="flex items-center gap-2 p-2.5 rounded-lg bg-[#FDF8EC] dark:bg-[#201D17] border border-[#C6A667]/50 cursor-pointer text-xs font-semibold text-[#8A6A2E] dark:text-[#E2CCA1]">
                       <input
                         type="checkbox"
                         checked={autoCalcFrom21}
@@ -2234,12 +2442,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   {/* Formula banner when autoCalc is active */}
                   {autoCalcFrom21 && (
-                    <div className="p-3.5 rounded-xl bg-[#1A1813] border border-[#C6A667]/30 text-xs text-[#E2CCA1] space-y-1">
-                      <div className="font-bold flex items-center gap-1.5 text-[#C6A667]">
+                    <div className="p-3.5 rounded-xl bg-[#FAF8F3] dark:bg-[#121319] border border-[#C6A667]/40 text-xs text-stone-700 dark:text-stone-300 space-y-1">
+                      <div className="font-bold flex items-center gap-1.5 text-[#8A6A2E] dark:text-[#E2CCA1]">
                         <Sparkles className="w-4 h-4" />
                         <span>معادلات الصاغة المطبقة لحظيًا:</span>
                       </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] pt-1 text-stone-300 font-mono">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] pt-1 text-stone-700 dark:text-stone-300 font-mono">
                         <div>• عيار 24 = عيار 21 × (24 ÷ 21) ≈ {Math.round(tempSettings.goldPrices.karat21 * (24/21))} ج.م</div>
                         <div>• عيار 18 = عيار 21 × (18 ÷ 21) ≈ {Math.round(tempSettings.goldPrices.karat21 * (18/21))} ج.م</div>
                         <div>• الجنيه الذهب = عيار 21 × 8 جم = {tempSettings.goldPrices.karat21 * 8} ج.م</div>
@@ -2249,23 +2457,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
                     {/* Primary Anchor: Karat 21 */}
-                    <div className="p-3 rounded-xl bg-[#201D17] border-2 border-[#C6A667] shadow-[0_0_15px_rgba(198,166,103,0.15)]">
+                    <div className="p-3 rounded-xl bg-[#FDF8EC] dark:bg-[#201D17] border-2 border-[#C6A667] shadow-xs">
                       <div className="flex items-center justify-between mb-1">
-                        <label className="block text-[#C6A667] font-bold">عيار 21 (المعيار الأساسي)</label>
+                        <label className="block text-[#8A6A2E] dark:text-[#E2CCA1] font-bold">عيار 21 (المعيار الأساسي)</label>
                         <span className="text-[10px] bg-[#C6A667] text-[#111111] px-1.5 py-0.2 rounded font-bold">الأساس</span>
                       </div>
                       <input
                         type="number"
                         value={tempSettings.goldPrices.karat21}
                         onChange={(e) => handleKarat21Change(Number(e.target.value))}
-                        className="w-full bg-[#141414] border border-[#C6A667]/60 rounded-lg p-2.5 font-mono text-base font-bold text-white focus:border-[#C6A667] outline-none"
+                        className="w-full bg-white dark:bg-[#121319] border border-[#C6A667]/70 rounded-lg p-2.5 font-mono text-base font-bold text-[#111111] dark:text-white focus:border-[#9E7F43] outline-none"
                         placeholder="3800"
                       />
-                      <span className="text-[10px] text-stone-400 mt-1 block">تغيير هذا السعر يحدث بقية الأسعار آليًا</span>
+                      <span className="text-[10px] text-stone-600 dark:text-stone-400 mt-1 block">تغيير هذا السعر يحدث بقية الأسعار آليًا</span>
                     </div>
 
                     <div>
-                      <label className="block text-stone-400 mb-1">عيار 24 النقي (ج.م للجرام)</label>
+                      <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">عيار 24 النقي (ج.م للجرام)</label>
                       <input
                         type="number"
                         value={tempSettings.goldPrices.karat24}
@@ -2278,13 +2486,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             },
                           })
                         }
-                        className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 font-mono text-white focus:border-[#C6A667] outline-none"
+                        className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 font-mono text-[#111111] dark:text-white focus:border-[#C6A667] outline-none"
                       />
-                      {autoCalcFrom21 && <span className="text-[10px] text-[#C6A667] mt-1 block">محسوب: 21 × (24/21)</span>}
+                      {autoCalcFrom21 && <span className="text-[10px] text-[#8A6A2E] dark:text-[#C6A667] mt-1 block">محسوب: 21 × (24/21)</span>}
                     </div>
 
                     <div>
-                      <label className="block text-stone-400 mb-1">عيار 18 (ج.م للجرام)</label>
+                      <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">عيار 18 (ج.م للجرام)</label>
                       <input
                         type="number"
                         value={tempSettings.goldPrices.karat18}
@@ -2297,13 +2505,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             },
                           })
                         }
-                        className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 font-mono text-white focus:border-[#C6A667] outline-none"
+                        className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 font-mono text-[#111111] dark:text-white focus:border-[#C6A667] outline-none"
                       />
-                      {autoCalcFrom21 && <span className="text-[10px] text-[#C6A667] mt-1 block">محسوب: 21 × (18/21)</span>}
+                      {autoCalcFrom21 && <span className="text-[10px] text-[#8A6A2E] dark:text-[#C6A667] mt-1 block">محسوب: 21 × (18/21)</span>}
                     </div>
 
                     <div>
-                      <label className="block text-stone-400 mb-1">الجنيه الذهب (8 جم 21k)</label>
+                      <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">الجنيه الذهب (8 جم 21k)</label>
                       <input
                         type="number"
                         value={tempSettings.goldPrices.goldPound}
@@ -2316,27 +2524,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             },
                           })
                         }
-                        className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 font-mono text-white focus:border-[#C6A667] outline-none"
+                        className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 font-mono text-[#111111] dark:text-white focus:border-[#C6A667] outline-none"
                       />
-                      {autoCalcFrom21 && <span className="text-[10px] text-[#C6A667] mt-1 block">محسوب: 8 × عيار 21</span>}
+                      {autoCalcFrom21 && <span className="text-[10px] text-[#8A6A2E] dark:text-[#C6A667] mt-1 block">محسوب: 8 × عيار 21</span>}
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-stone-400 mb-1">نص إخلاء المسؤولية والتنبيه للمستهلك</label>
+                    <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">نص إخلاء المسؤولية والتنبيه للمستهلك</label>
                     <textarea
                       rows={2}
                       value={tempSettings.priceDisclaimer}
                       onChange={(e) =>
                         setTempSettings({ ...tempSettings, priceDisclaimer: e.target.value })
                       }
-                      className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 text-xs text-white focus:border-[#C6A667] outline-none"
+                      className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 text-xs text-[#111111] dark:text-white focus:border-[#C6A667] outline-none"
                     />
                   </div>
 
                   <button
                     onClick={handleSaveSettings}
-                    className="px-6 py-2.5 rounded-lg bg-[#C6A667] text-[#111111] font-bold text-xs hover:bg-[#E2CCA1] cursor-pointer flex items-center gap-1.5 shadow-md"
+                    className="px-6 py-2.5 rounded-lg bg-[#C6A667] text-[#111111] font-bold text-xs hover:bg-[#B89347] cursor-pointer flex items-center gap-1.5 shadow-sm transition-colors"
                   >
                     <Save className="w-4 h-4" />
                     <span>حفظ وتطبيق أسعار الذهب على الموقع فورًا</span>
@@ -2349,32 +2557,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {activeTab === 'settings' && (
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 {/* Global Price Visibility Mode Control */}
-                <div className="p-5 rounded-xl bg-gradient-to-r from-[#171510] to-[#14151B] border-2 border-[#C6A667]/40 shadow-lg space-y-3">
+                <div className="p-5 rounded-xl bg-gradient-to-r from-[#FDF8EC] to-white dark:from-[#201D17] dark:to-[#1B1D25] border-2 border-[#C6A667]/50 shadow-xs space-y-3">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-[#C6A667]/20 border border-[#C6A667]/40 flex items-center justify-center text-[#C6A667] shrink-0">
-                        {tempSettings.hideAllPrices ? <EyeOff className="w-5 h-5 text-amber-400" /> : <Eye className="w-5 h-5 text-emerald-400" />}
+                      <div className="w-10 h-10 rounded-xl bg-[#F4EFE6] dark:bg-[#121319] border border-[#C6A667]/50 flex items-center justify-center shrink-0">
+                        {tempSettings.hideAllPrices ? <EyeOff className="w-5 h-5 text-amber-700 dark:text-amber-400" /> : <Eye className="w-5 h-5 text-emerald-700 dark:text-emerald-400" />}
                       </div>
                       <div>
-                        <h4 className="text-sm font-bold text-[#FAF6ED] flex items-center gap-2">
+                        <h4 className="text-sm font-bold text-[#111111] dark:text-[#FAF8F3] flex items-center gap-2">
                           <span>سياسة عرض أسعار المنتجات في الموقع</span>
                           {tempSettings.hideAllPrices ? (
-                            <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 font-medium">
+                            <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50 font-medium">
                               مخفية (استفسار واتساب)
                             </span>
                           ) : (
-                            <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-medium">
+                            <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 font-medium">
                               معروضة بالأرقام
                             </span>
                           )}
                         </h4>
-                        <p className="text-xs text-stone-300 mt-0.5">
+                        <p className="text-xs text-stone-600 dark:text-stone-400 mt-0.5">
                           التحكم في إظهار أو إخفاء الأسعار الرقمية في صفحات الكتالوج وتفاصيل القطع
                         </p>
                       </div>
                     </div>
 
-                    <label className="flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-[#201D17] border border-[#C6A667]/50 cursor-pointer text-xs font-bold text-white hover:bg-[#2A261D] transition-colors shrink-0">
+                    <label className="flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-white dark:bg-[#121319] border border-[#C6A667]/60 cursor-pointer text-xs font-bold text-[#111111] dark:text-[#FAF8F3] hover:bg-[#FAF8F3] dark:hover:bg-[#191B23] transition-colors shrink-0">
                       <input
                         type="checkbox"
                         checked={Boolean(tempSettings.hideAllPrices)}
@@ -2387,8 +2595,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </label>
                   </div>
 
-                  <div className="p-3 rounded-lg bg-[#111111]/80 border border-stone-800 text-[11px] text-stone-300 leading-relaxed flex items-start gap-2">
-                    <MessageCircle className="w-4 h-4 text-[#25D366] shrink-0 mt-0.5" />
+                  <div className="p-3 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800 text-[11px] text-stone-700 dark:text-stone-300 leading-relaxed flex items-start gap-2">
+                    <MessageCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                     <span>
                       {tempSettings.hideAllPrices
                         ? 'الوضع الحالي مفعل: جميع بطاقات المنتجات وتفاصيلها وسلة الطلبات تعرض "اسأل عن السعر عبر واتساب". عند ضغط العميل، يتم توجيهه لمحادثتكم على واتساب مع تفاصيل القطعة للاستفسار عن السعر اللحظي الدقيق والمصنعية حسب بورصة الذهب اليوم.'
@@ -2397,28 +2605,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
 
-                <div className="p-5 rounded-xl bg-[#14151B] border border-stone-800 space-y-4">
-                  <h4 className="text-sm font-bold text-[#FAF6ED]">بيانات وهوية المحل ورقم الواتساب</h4>
+                <div className="p-5 rounded-xl bg-white dark:bg-[#1B1D25] border border-[#E8DEC9] dark:border-stone-800 shadow-xs space-y-4">
+                  <h4 className="text-sm font-bold text-[#111111] dark:text-[#FAF8F3]">بيانات وهوية المحل ورقم الواتساب</h4>
 
                   {/* Brand Logo Card */}
-                  <div className="p-4 rounded-xl bg-[#181922] border border-[#C6A667]/25 flex flex-col sm:flex-row items-center gap-4">
-                    <img
-                      src={tempSettings.logoUrl || '/assets/aistudio/logo_20a2cea5.jpeg'}
-                      alt="شعار المحل"
-                      className="h-16 w-auto object-contain rounded-lg border border-[#C6A667]/30 bg-black p-1 shrink-0 shadow-md"
-                    />
+                  <div className="p-4 rounded-xl bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800 flex flex-col sm:flex-row items-center gap-4">
+                    <div className="bg-[#111111] p-1 rounded-lg border border-[#C6A667]/50 shrink-0 shadow-xs">
+                      <img
+                        src={tempSettings.logoUrl || '/assets/aistudio/logo_20a2cea5.jpeg'}
+                        alt="شعار المحل"
+                        className="h-14 w-auto object-contain rounded"
+                      />
+                    </div>
                     <div className="flex-1 w-full text-xs">
-                      <label className="block text-[#FAF8F3] font-bold mb-1">شعار المحل المعتمد (اللوجو)</label>
+                      <label className="block text-[#111111] dark:text-[#FAF8F3] font-bold mb-1">شعار المحل المعتمد (اللوجو)</label>
                       <input
                         type="text"
                         value={tempSettings.logoUrl || '/assets/aistudio/logo_20a2cea5.jpeg'}
                         onChange={(e) =>
                           setTempSettings({ ...tempSettings, logoUrl: e.target.value })
                         }
-                        className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2 text-stone-200 font-mono text-[11px] focus:border-[#C6A667] outline-none"
+                        className="w-full bg-white dark:bg-[#1B1D25] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2 text-[#111111] dark:text-white font-mono text-[11px] focus:border-[#C6A667] outline-none"
                         placeholder="/assets/aistudio/logo_20a2cea5.jpeg"
                       />
-                      <span className="text-[10px] text-[#C6A667] mt-1 block font-medium">
+                      <span className="text-[10px] text-[#8A6A2E] dark:text-[#C6A667] mt-1 block font-medium">
                         ✓ تم تفعيل وربط الشعار الرسمي (SOLIMAN GOLD · تأنقي) في الهيدر، الفوتر، والبانر
                       </span>
                     </div>
@@ -2426,19 +2636,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                     <div>
-                      <label className="block text-stone-400 mb-1">اسم محل المجوهرات *</label>
+                      <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">اسم محل المجوهرات *</label>
                       <input
                         type="text"
                         value={tempSettings.storeName}
                         onChange={(e) =>
                           setTempSettings({ ...tempSettings, storeName: e.target.value })
                         }
-                        className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 text-white focus:border-[#D4AF37] outline-none"
+                        className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 text-[#111111] dark:text-white focus:border-[#C6A667] outline-none"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-stone-400 mb-1">
+                      <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">
                         رقم واتساب المحل (مباشر لاستقبال الطلبات) *
                       </label>
                       <input
@@ -2447,85 +2657,85 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         onChange={(e) =>
                           setTempSettings({ ...tempSettings, whatsappNumber: e.target.value })
                         }
-                        className="w-full bg-[#1A1C24] border border-[#25D366]/50 rounded-lg p-2.5 font-mono text-emerald-400 focus:border-[#25D366] outline-none"
+                        className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-emerald-400 dark:border-emerald-600 rounded-lg p-2.5 font-mono text-emerald-700 dark:text-emerald-400 font-bold focus:border-emerald-600 outline-none"
                         placeholder="201012345678 أو 01012345678"
                       />
-                      <span className="text-[11px] text-stone-500 mt-1 block">
+                      <span className="text-[11px] text-stone-500 dark:text-stone-400 mt-1 block">
                         مثال: 01001234567 أو 201001234567 (يتم ربطه تلقائياً بروابط wa.me)
                       </span>
                     </div>
 
                     <div>
-                      <label className="block text-stone-400 mb-1">رقم هاتف الاتصال المباشر</label>
+                      <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">رقم هاتف الاتصال المباشر</label>
                       <input
                         type="text"
                         value={tempSettings.phoneNumber}
                         onChange={(e) =>
                           setTempSettings({ ...tempSettings, phoneNumber: e.target.value })
                         }
-                        className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 text-white focus:border-[#D4AF37] outline-none"
+                        className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 text-[#111111] dark:text-white focus:border-[#C6A667] outline-none"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-stone-400 mb-1">ساعات العمل والدوام</label>
+                      <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">ساعات العمل والدوام</label>
                       <input
                         type="text"
                         value={tempSettings.workHours}
                         onChange={(e) =>
                           setTempSettings({ ...tempSettings, workHours: e.target.value })
                         }
-                        className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 text-white focus:border-[#D4AF37] outline-none"
+                        className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 text-[#111111] dark:text-white focus:border-[#C6A667] outline-none"
                       />
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-stone-400 mb-1">عنوان الفروع والمحل</label>
+                    <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">عنوان الفروع والمحل</label>
                     <input
                       type="text"
                       value={tempSettings.address}
                       onChange={(e) =>
                         setTempSettings({ ...tempSettings, address: e.target.value })
                       }
-                      className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 text-white focus:border-[#D4AF37] outline-none"
+                      className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 text-[#111111] dark:text-white focus:border-[#C6A667] outline-none"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-stone-400 mb-1">عنوان البانر الرئيسي في الصفحة الأولى</label>
+                    <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">عنوان البانر الرئيسي في الصفحة الأولى</label>
                     <input
                       type="text"
                       value={tempSettings.heroBannerTitle}
                       onChange={(e) =>
                         setTempSettings({ ...tempSettings, heroBannerTitle: e.target.value })
                       }
-                      className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 text-white focus:border-[#D4AF37] outline-none"
+                      className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 text-[#111111] dark:text-white focus:border-[#C6A667] outline-none"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-stone-400 mb-1">الشريط الإخباري المتحرك أعلى الموقع</label>
+                    <label className="block text-stone-600 dark:text-stone-400 font-medium mb-1">الشريط الإخباري المتحرك أعلى الموقع</label>
                     <input
                       type="text"
                       value={tempSettings.announcementBar}
                       onChange={(e) =>
                         setTempSettings({ ...tempSettings, announcementBar: e.target.value })
                       }
-                      className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 text-white focus:border-[#D4AF37] outline-none"
+                      className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 text-[#111111] dark:text-white focus:border-[#C6A667] outline-none"
                     />
                   </div>
 
                   {/* Admin Password / PIN Security */}
-                  <div className="p-4 rounded-xl bg-[#181922] border border-stone-800 space-y-2">
+                  <div className="p-4 rounded-xl bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800 space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <Lock className="w-4 h-4 text-[#C6A667]" />
-                        <label className="block text-white font-bold text-xs">
+                        <Lock className="w-4 h-4 text-[#8A6A2E] dark:text-[#C6A667]" />
+                        <label className="block text-[#111111] dark:text-[#FAF8F3] font-bold text-xs">
                           رمز مرور لوحة التحكم (الرقم السري)
                         </label>
                       </div>
-                      <span className="text-[11px] text-stone-400">
+                      <span className="text-[11px] text-stone-500 dark:text-stone-400">
                         مخفي لحماية لوحة التحكم
                       </span>
                     </div>
@@ -2538,25 +2748,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           setTempSettings({ ...tempSettings, adminPin: e.target.value })
                         }
                         placeholder="••••••"
-                        className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg p-2.5 pl-10 text-white font-mono tracking-widest text-sm focus:border-[#C6A667] outline-none"
+                        className="w-full bg-white dark:bg-[#1B1D25] border border-[#E0D6C3] dark:border-stone-700 rounded-lg p-2.5 pl-10 text-[#111111] dark:text-white font-mono tracking-widest text-sm focus:border-[#C6A667] outline-none"
                       />
                       <button
                         type="button"
                         onClick={() => setShowSettingsPin(!showSettingsPin)}
-                        className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-white transition-colors cursor-pointer p-1"
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white transition-colors cursor-pointer p-1"
                         title={showSettingsPin ? 'إخفاء الرمز' : 'إظهار الرمز'}
                       >
                         {showSettingsPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
                     </div>
-                    <p className="text-[11px] text-stone-500">
-                      الرمز السري الحالي هو 112233. يمكنك تعديله وحفظ التغييرات في أي وقت.
+                    <p className="text-[11px] text-stone-500 dark:text-stone-400">
+                      يمكنك تعديل رمز المرور وحفظ التغييرات في أي وقت.
                     </p>
                   </div>
 
                   <button
                     onClick={handleSaveSettings}
-                    className="px-6 py-2.5 rounded-lg bg-[#D4AF37] text-black font-bold text-xs hover:bg-[#F3E5AB] cursor-pointer flex items-center gap-1.5"
+                    className="px-6 py-2.5 rounded-lg bg-[#C6A667] text-[#111111] font-bold text-xs hover:bg-[#B89347] cursor-pointer flex items-center gap-1.5 shadow-sm transition-colors"
                   >
                     <Save className="w-4 h-4" />
                     <span>حفظ التعديلات في الموقع</span>
@@ -2570,82 +2780,82 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
                 
                 {/* Header & Template Download */}
-                <div className="p-5 rounded-2xl bg-gradient-to-r from-[#171922] via-[#14151C] to-[#171922] border border-[#C6A667]/25 space-y-4 shadow-lg">
+                <div className="p-5 rounded-2xl bg-white dark:bg-[#1B1D25] border border-[#E8DEC9] dark:border-stone-800 space-y-4 shadow-xs">
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
-                        <span className="p-1.5 rounded-lg bg-emerald-950/70 text-emerald-400 border border-emerald-800/60">
+                        <span className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/60">
                           <FileSpreadsheet className="w-5 h-5" />
                         </span>
-                        <h4 className="text-base font-bold text-[#FAF8F3]">
+                        <h4 className="text-base font-bold text-[#111111] dark:text-[#FAF8F3]">
                           استيراد الأصناف عبر إكسيل (شيت برنامج المحل)
                         </h4>
                       </div>
-                      <p className="text-xs text-stone-300 leading-relaxed">
-                        قم برفع ملف الإكسيل المصدر مباشرة من برنامج نقاط البيع / الصاغة لديك. يتعرف النظام تلقائياً على الأعمدة الستة المحددة ويحدث الكتالوج فورياً.
+                      <p className="text-xs text-stone-600 dark:text-stone-400 leading-relaxed">
+                        قم برفع ملف الإكسيل المصدر مباشرة من برنامج نقاط البيع / الصاغة لديك. يتعرف النظام تلقائياً على الأعمدة الثمانية المحددة ويحدث الكتالوج فورياً.
                       </p>
                     </div>
 
                     <button
                       type="button"
                       onClick={downloadSampleExcelTemplate}
-                      className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#202330] hover:bg-[#282C3D] border border-[#C6A667]/40 text-[#FAF8F3] hover:text-[#C6A667] text-xs font-bold transition-all shadow-sm shrink-0 cursor-pointer"
-                      title="تحميل ملف إكسيل حقيقي يحتوي على الـ 6 أعمدة ونماذج بيانات"
+                      className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#FAF8F3] dark:bg-[#121319] hover:bg-[#F4EFE6] dark:hover:bg-[#232632] border border-[#C6A667]/60 text-[#8A6A2E] dark:text-[#E2CCA1] text-xs font-bold transition-all shadow-xs shrink-0 cursor-pointer"
+                      title="تحميل ملف إكسيل حقيقي يحتوي على الـ 8 أعمدة ونماذج بيانات"
                     >
-                      <Download className="w-4 h-4 text-[#C6A667]" />
+                      <Download className="w-4 h-4 text-[#8A6A2E] dark:text-[#C6A667]" />
                       <span>تحميل نموذج إكسيل تجريبي (.xlsx)</span>
                     </button>
                   </div>
 
-                  {/* 6 Required Columns Badges */}
-                  <div className="pt-2 border-t border-stone-800/80">
-                    <div className="flex items-center gap-2 text-[11px] text-stone-400 mb-2">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  {/* 8 Required Columns Badges */}
+                  <div className="pt-3 border-t border-[#EFE9DD] dark:border-stone-800">
+                    <div className="flex items-center gap-2 text-[11px] text-stone-600 dark:text-stone-400 mb-2">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                       <span>أعمدة الشيت المعتمدة (8 أعمدة رسمية):</span>
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 text-center text-xs">
-                      <div className="p-2 rounded-lg bg-[#1B1D27] border border-stone-800">
-                        <span className="text-[10px] text-stone-500 block mb-0.5">العمود 1</span>
-                        <span className="font-bold text-[#FAF8F3]">كود المنتج</span>
+                      <div className="p-2 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800">
+                        <span className="text-[10px] text-stone-500 dark:text-stone-400 block mb-0.5">العمود 1</span>
+                        <span className="font-bold text-[#111111] dark:text-[#FAF8F3]">كود المنتج</span>
                       </div>
-                      <div className="p-2 rounded-lg bg-[#1B1D27] border border-stone-800">
-                        <span className="text-[10px] text-stone-500 block mb-0.5">العمود 2</span>
-                        <span className="font-bold text-[#FAF8F3]">اسم المنتج (SEO)</span>
+                      <div className="p-2 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800">
+                        <span className="text-[10px] text-stone-500 dark:text-stone-400 block mb-0.5">العمود 2</span>
+                        <span className="font-bold text-[#111111] dark:text-[#FAF8F3]">اسم المنتج (SEO)</span>
                       </div>
-                      <div className="p-2 rounded-lg bg-[#1B1D27] border border-stone-800">
-                        <span className="text-[10px] text-stone-500 block mb-0.5">العمود 3</span>
-                        <span className="font-bold text-[#FAF8F3]">التصنيف</span>
+                      <div className="p-2 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800">
+                        <span className="text-[10px] text-stone-500 dark:text-stone-400 block mb-0.5">العمود 3</span>
+                        <span className="font-bold text-[#111111] dark:text-[#FAF8F3]">التصنيف</span>
                       </div>
-                      <div className="p-2 rounded-lg bg-[#1B1D27] border border-stone-800">
-                        <span className="text-[10px] text-stone-500 block mb-0.5">العمود 4</span>
-                        <span className="font-bold text-[#FAF8F3]">العيار</span>
+                      <div className="p-2 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800">
+                        <span className="text-[10px] text-stone-500 dark:text-stone-400 block mb-0.5">العمود 4</span>
+                        <span className="font-bold text-[#111111] dark:text-[#FAF8F3]">العيار</span>
                       </div>
-                      <div className="p-2 rounded-lg bg-[#1B1D27] border border-stone-800">
-                        <span className="text-[10px] text-stone-500 block mb-0.5">العمود 5</span>
-                        <span className="font-bold text-[#FAF8F3]">الوزن الظاهر (جرام)</span>
+                      <div className="p-2 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800">
+                        <span className="text-[10px] text-stone-500 dark:text-stone-400 block mb-0.5">العمود 5</span>
+                        <span className="font-bold text-[#111111] dark:text-[#FAF8F3]">الوزن الظاهر (جرام)</span>
                       </div>
-                      <div className="p-2 rounded-lg bg-[#1B1D27] border border-stone-800">
-                        <span className="text-[10px] text-stone-500 block mb-0.5">العمود 6</span>
-                        <span className="font-bold text-[#FAF8F3]">وصف مختصر</span>
+                      <div className="p-2 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800">
+                        <span className="text-[10px] text-stone-500 dark:text-stone-400 block mb-0.5">العمود 6</span>
+                        <span className="font-bold text-[#111111] dark:text-[#FAF8F3]">وصف مختصر</span>
                       </div>
-                      <div className="p-2 rounded-lg bg-[#1B1D27] border border-stone-800">
-                        <span className="text-[10px] text-stone-500 block mb-0.5">العمود 7</span>
-                        <span className="font-bold text-[#FAF8F3]">عنوان SEO</span>
+                      <div className="p-2 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800">
+                        <span className="text-[10px] text-stone-500 dark:text-stone-400 block mb-0.5">العمود 7</span>
+                        <span className="font-bold text-[#111111] dark:text-[#FAF8F3]">عنوان SEO</span>
                       </div>
-                      <div className="p-2 rounded-lg bg-[#1B1D27] border border-stone-800">
-                        <span className="text-[10px] text-stone-500 block mb-0.5">العمود 8</span>
-                        <span className="font-bold text-[#FAF8F3]">السعر (جنيه)</span>
+                      <div className="p-2 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800">
+                        <span className="text-[10px] text-stone-500 dark:text-stone-400 block mb-0.5">العمود 8</span>
+                        <span className="font-bold text-[#111111] dark:text-[#FAF8F3]">السعر (جنيه)</span>
                       </div>
                     </div>
 
-                    <div className="mt-3 p-2.5 rounded-lg bg-[#171822] border border-stone-800 flex flex-wrap items-center gap-1.5 text-[11px] text-stone-400">
-                      <span className="text-[#C6A667] font-bold">أقسام المحل الـ 10 المعرفة:</span>
+                    <div className="mt-3 p-2.5 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800 flex flex-wrap items-center gap-1.5 text-[11px] text-stone-600 dark:text-stone-400">
+                      <span className="text-[#8A6A2E] dark:text-[#C6A667] font-bold">أقسام المحل الـ 10 المعرفة:</span>
                       {['سبايك', 'خواتم', 'دبل', 'حلقان', 'اساور', 'توينزات', 'تعاليق', 'انسيال', 'عقد', 'سلاسل'].map((name) => (
-                        <span key={name} className="px-2 py-0.5 rounded bg-[#202230] text-stone-200 border border-stone-700 font-medium">
+                        <span key={name} className="px-2 py-0.5 rounded bg-white dark:bg-[#1B1D25] text-stone-700 dark:text-stone-300 border border-[#E0D6C3] dark:border-stone-700 font-medium">
                           {name}
                         </span>
                       ))}
-                      <span className="text-stone-500 text-[10px] mr-1">(يتعرف النظام تلقائياً على القسم من شيت برنامجك)</span>
+                      <span className="text-stone-500 dark:text-stone-400 text-[10px] mr-1">(يتعرف النظام تلقائياً على القسم من شيت برنامجك)</span>
                     </div>
                   </div>
                 </div>
@@ -2658,7 +2868,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       e.stopPropagation();
                     }}
                     onDrop={handleExcelDrop}
-                    className="relative border-2 border-dashed border-stone-700 hover:border-[#C6A667] rounded-2xl p-8 sm:p-12 text-center transition-all bg-[#14151D]/60 hover:bg-[#161822] group"
+                    className="relative border-2 border-dashed border-[#D6C9B0] dark:border-stone-700 hover:border-[#C6A667] dark:hover:border-[#C6A667] rounded-2xl p-8 sm:p-12 text-center transition-all bg-white dark:bg-[#1B1D25] hover:bg-[#FDFBF6] dark:hover:bg-[#1F212B] group"
                   >
                     <input
                       type="file"
@@ -2672,7 +2882,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       htmlFor="excel-file-input"
                       className="cursor-pointer flex flex-col items-center justify-center space-y-4"
                     >
-                      <div className="w-16 h-16 rounded-2xl bg-emerald-950/40 border border-emerald-700/50 flex items-center justify-center text-emerald-400 group-hover:scale-105 group-hover:border-emerald-500 transition-all shadow-inner">
+                      <div className="w-16 h-16 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/60 flex items-center justify-center text-emerald-700 dark:text-emerald-400 group-hover:scale-105 group-hover:border-emerald-400 transition-all shadow-xs">
                         {isReadingExcel ? (
                           <RefreshCw className="w-8 h-8 animate-spin" />
                         ) : (
@@ -2681,24 +2891,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
 
                       <div className="space-y-1">
-                        <h5 className="text-base font-bold text-white group-hover:text-[#C6A667] transition-colors">
+                        <h5 className="text-base font-bold text-[#111111] dark:text-[#FAF8F3] group-hover:text-[#8A6A2E] dark:group-hover:text-[#E2CCA1] transition-colors">
                           {isReadingExcel
                             ? 'جارٍ قراءة وفحص شيت الإكسيل...'
                             : 'اسحب شيت الإكسيل وأفلته هنا، أو اضغط للاختيار من جهازك'}
                         </h5>
-                        <p className="text-xs text-stone-400">
+                        <p className="text-xs text-stone-500 dark:text-stone-400">
                           يدعم كافة صيغ مايكروسوفت إكسيل (.xlsx و .xls) وملفات الجداول (.csv)
                         </p>
                       </div>
 
-                      <div className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#C6A667] hover:bg-[#E2CCA1] text-[#111111] font-bold text-xs shadow-md transition-all">
+                      <div className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#C6A667] hover:bg-[#B89347] text-[#111111] font-bold text-xs shadow-sm transition-all">
                         <UploadCloud className="w-4 h-4" />
                         <span>اختيار ملف الشيت من الكمبيوتر أو الهاتف</span>
                       </div>
                     </label>
 
                     {excelFileError && (
-                      <div className="mt-4 p-3 rounded-xl bg-red-950/50 border border-red-800 text-red-300 text-xs flex items-center justify-center gap-2">
+                      <div className="mt-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-center justify-center gap-2">
                         <AlertTriangle className="w-4 h-4 shrink-0" />
                         <span>{excelFileError}</span>
                       </div>
@@ -2709,22 +2919,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <div className="space-y-4 animate-fadeIn">
                     
                     {/* Summary Metrics Banner */}
-                    <div className="p-4 rounded-xl bg-[#161722] border border-stone-800 flex flex-wrap items-center justify-between gap-4">
+                    <div className="p-4 rounded-xl bg-white dark:bg-[#1B1D25] border border-[#E8DEC9] dark:border-stone-800 flex flex-wrap items-center justify-between gap-4 shadow-xs">
                       <div className="flex flex-wrap items-center gap-3">
-                        <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-400 bg-emerald-950/50 px-3 py-1.5 rounded-lg border border-emerald-800/60">
-                          <CheckCircle2 className="w-4 h-4" />
+                        <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 px-3 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800/60">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                           <span>الملف: {excelFileName}</span>
                         </span>
                         
-                        <span className="text-xs text-stone-300 bg-[#1D1F2C] px-3 py-1.5 rounded-lg border border-stone-700">
-                          إجمالي المقروء: <strong className="text-white font-mono">{parsedExcelItems.length}</strong> صنف
+                        <span className="text-xs text-stone-700 dark:text-stone-300 bg-[#FAF8F3] dark:bg-[#121319] px-3 py-1.5 rounded-lg border border-[#E0D6C3] dark:border-stone-700">
+                          إجمالي المقروء: <strong className="text-[#111111] dark:text-[#FAF8F3] font-mono">{parsedExcelItems.length}</strong> صنف
                         </span>
 
-                        <span className="text-xs text-[#C6A667] bg-[#C6A667]/10 px-3 py-1.5 rounded-lg border border-[#C6A667]/30">
+                        <span className="text-xs text-[#8A6A2E] dark:text-[#E2CCA1] bg-[#FDF8EC] dark:bg-[#201D17] px-3 py-1.5 rounded-lg border border-[#C6A667]/50">
                           جديدة: <strong className="font-mono">{parsedExcelItems.filter(i => !i.isExisting).length}</strong>
                         </span>
 
-                        <span className="text-xs text-blue-300 bg-blue-950/40 px-3 py-1.5 rounded-lg border border-blue-800/50">
+                        <span className="text-xs text-blue-800 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/40 px-3 py-1.5 rounded-lg border border-blue-200 dark:border-blue-800/50">
                           تحديث لموجود: <strong className="font-mono">{parsedExcelItems.filter(i => i.isExisting).length}</strong>
                         </span>
                       </div>
@@ -2733,7 +2943,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <button
                           type="button"
                           onClick={handleClearExcel}
-                          className="px-3 py-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-medium transition-colors cursor-pointer"
+                          className="px-3 py-1.5 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] hover:bg-[#EFE9DD] dark:hover:bg-[#232632] border border-[#E0D6C3] dark:border-stone-700 text-stone-700 dark:text-stone-300 text-xs font-medium transition-colors cursor-pointer"
                         >
                           تغيير الملف
                         </button>
@@ -2741,15 +2951,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
 
                     {/* Filter & Search Bar */}
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#13141B] p-3 rounded-xl border border-stone-800">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-[#1B1D25] p-3 rounded-xl border border-[#E8DEC9] dark:border-stone-800">
                       <div className="relative flex-1 max-w-sm">
-                        <Search className="w-4 h-4 text-stone-500 absolute right-3 top-1/2 -translate-y-1/2" />
+                        <Search className="w-4 h-4 text-stone-400 dark:text-stone-500 absolute right-3 top-1/2 -translate-y-1/2" />
                         <input
                           type="text"
                           value={previewSearch}
                           onChange={(e) => setPreviewSearch(e.target.value)}
                           placeholder="بحث بالكود أو اسم الصنف أو المجموعة..."
-                          className="w-full bg-[#1A1C26] border border-stone-700 rounded-lg pr-9 pl-3 py-2 text-xs text-white placeholder-stone-500 focus:border-[#C6A667] outline-none"
+                          className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg pr-9 pl-3 py-2 text-xs text-[#111111] dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:border-[#C6A667] outline-none"
                         />
                       </div>
 
@@ -2759,8 +2969,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           onClick={() => setPreviewFilter('all')}
                           className={`px-3 py-1.5 rounded-lg font-medium transition-colors cursor-pointer ${
                             previewFilter === 'all'
-                              ? 'bg-[#C6A667] text-black font-bold'
-                              : 'bg-[#1A1C26] text-stone-400 hover:text-white'
+                              ? 'bg-[#C6A667] text-[#111111] font-bold'
+                              : 'bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 text-stone-600 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white'
                           }`}
                         >
                           الكل ({parsedExcelItems.length})
@@ -2770,8 +2980,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           onClick={() => setPreviewFilter('new')}
                           className={`px-3 py-1.5 rounded-lg font-medium transition-colors cursor-pointer ${
                             previewFilter === 'new'
-                              ? 'bg-[#C6A667] text-black font-bold'
-                              : 'bg-[#1A1C26] text-stone-400 hover:text-white'
+                              ? 'bg-[#C6A667] text-[#111111] font-bold'
+                              : 'bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 text-stone-600 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white'
                           }`}
                         >
                           جديدة ({parsedExcelItems.filter(i => !i.isExisting).length})
@@ -2781,8 +2991,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           onClick={() => setPreviewFilter('existing')}
                           className={`px-3 py-1.5 rounded-lg font-medium transition-colors cursor-pointer ${
                             previewFilter === 'existing'
-                              ? 'bg-[#C6A667] text-black font-bold'
-                              : 'bg-[#1A1C26] text-stone-400 hover:text-white'
+                              ? 'bg-[#C6A667] text-[#111111] font-bold'
+                              : 'bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 text-stone-600 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white'
                           }`}
                         >
                           تحديث مسجل ({parsedExcelItems.filter(i => i.isExisting).length})
@@ -2791,9 +3001,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
 
                     {/* Preview Table */}
-                    <div className="rounded-xl border border-stone-800 overflow-hidden bg-[#12131A] max-h-80 overflow-y-auto">
+                    <div className="rounded-xl border border-[#E8DEC9] dark:border-stone-800 overflow-hidden bg-white dark:bg-[#1B1D25] max-h-80 overflow-y-auto shadow-xs">
                       <table className="w-full text-right text-xs">
-                        <thead className="bg-[#181922] text-stone-400 border-b border-stone-800 sticky top-0 z-10 shadow-sm">
+                        <thead className="bg-[#F4EFE6] dark:bg-[#191B23] text-stone-700 dark:text-stone-300 border-b border-[#E8DEC9] dark:border-stone-800 sticky top-0 z-10 font-bold">
                           <tr>
                             <th className="p-3">#</th>
                             <th className="p-3">كود المنتج</th>
@@ -2807,7 +3017,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <th className="p-3 text-center">حالة الصنف</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-stone-800/70">
+                        <tbody className="divide-y divide-[#EFE9DD] dark:divide-stone-800/70">
                           {parsedExcelItems
                             .filter((item) => {
                               if (previewFilter === 'new' && item.isExisting) return false;
@@ -2825,42 +3035,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             .map((item, idx) => (
                               <tr
                                 key={idx}
-                                className="hover:bg-[#191B24] transition-colors"
+                                className="hover:bg-[#FAF8F3] dark:hover:bg-[#1F212B] transition-colors"
                               >
-                                <td className="p-3 font-mono text-stone-500 text-[11px]">{idx + 1}</td>
-                                <td className="p-3 font-mono font-bold text-[#C6A667]">
+                                <td className="p-3 font-mono text-stone-500 dark:text-stone-400 text-[11px]">{idx + 1}</td>
+                                <td className="p-3 font-mono font-bold text-[#8A6A2E] dark:text-[#C6A667]">
                                   #{item.code}
                                 </td>
-                                <td className="p-3 font-semibold text-white max-w-xs truncate">
+                                <td className="p-3 font-semibold text-[#111111] dark:text-[#FAF8F3] max-w-xs truncate">
                                   {item.name}
                                 </td>
-                                <td className="p-3 text-stone-300">
-                                  <span className="inline-block px-2 py-0.5 rounded bg-stone-800 text-stone-300 text-[11px]">
+                                <td className="p-3 text-stone-700 dark:text-stone-300">
+                                  <span className="inline-block px-2 py-0.5 rounded bg-[#F4EFE6] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 text-stone-700 dark:text-stone-300 text-[11px]">
                                     {item.categoryName}
                                   </span>
                                 </td>
-                                <td className="p-3 font-bold text-amber-300 font-mono">
+                                <td className="p-3 font-bold text-[#8A6A2E] dark:text-[#C6A667] font-mono">
                                   عيار {item.karat}
                                 </td>
-                                <td className="p-3 font-mono text-stone-200">
+                                <td className="p-3 font-mono text-stone-700 dark:text-stone-300">
                                   {item.weight > 0 ? `${item.weight} جم` : '—'}
                                 </td>
-                                <td className="p-3 text-stone-300 max-w-[180px] truncate text-[11px]">
+                                <td className="p-3 text-stone-600 dark:text-stone-400 max-w-[180px] truncate text-[11px]">
                                   {item.description || '—'}
                                 </td>
-                                <td className="p-3 text-[#E2CCA1] max-w-[180px] truncate text-[11px] font-mono">
+                                <td className="p-3 text-[#8A6A2E] dark:text-[#C6A667] max-w-[180px] truncate text-[11px] font-mono">
                                   {item.seoTitle || '—'}
                                 </td>
-                                <td className="p-3 font-mono font-bold text-[#C6A667]">
+                                <td className="p-3 font-mono font-bold text-[#8A6A2E] dark:text-[#E2CCA1]">
                                   {item.price > 0 ? formatCurrency(item.price, settings.currency) : '—'}
                                 </td>
                                 <td className="p-3 text-center">
                                   {item.isExisting ? (
-                                    <span className="inline-flex items-center gap-1 text-[10px] text-blue-300 bg-blue-950/60 border border-blue-800/60 px-2 py-0.5 rounded-full font-medium">
+                                    <span className="inline-flex items-center gap-1 text-[10px] text-blue-800 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/50 px-2 py-0.5 rounded-full font-medium">
                                       <span>تحديث الصنف</span>
                                     </span>
                                   ) : (
-                                    <span className="inline-flex items-center gap-1 text-[10px] text-emerald-300 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-full font-medium">
+                                    <span className="inline-flex items-center gap-1 text-[10px] text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/60 px-2 py-0.5 rounded-full font-medium">
                                       <span>صنف جديد</span>
                                     </span>
                                   )}
@@ -2872,14 +3082,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
 
                     {parsedExcelItems.length > 100 && (
-                      <p className="text-[11px] text-stone-500 text-center">
+                      <p className="text-[11px] text-stone-500 dark:text-stone-400 text-center">
                         يتم عرض أول 100 صنف للمعاينة، وسيتم استيراد كافة الأصناف ({parsedExcelItems.length} صنف) بالكامل.
                       </p>
                     )}
 
                     {/* Options & Action Confirm Button */}
-                    <div className="p-4 rounded-xl bg-[#161722] border border-stone-800 space-y-4">
-                      <label className="flex items-center gap-2.5 cursor-pointer text-xs text-stone-300 select-none">
+                    <div className="p-4 rounded-xl bg-white dark:bg-[#1B1D25] border border-[#E8DEC9] dark:border-stone-800 space-y-4 shadow-xs">
+                      <label className="flex items-center gap-2.5 cursor-pointer text-xs text-stone-700 dark:text-stone-300 select-none">
                         <input
                           type="checkbox"
                           checked={updateExistingByCode}
@@ -2892,8 +3102,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </label>
 
                       {bulkImportStatus && (
-                        <div className="p-3 rounded-lg bg-[#1B1D29] border border-[#C6A667]/40 text-xs text-[#FAF8F3] flex items-center gap-2 font-medium">
-                          <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <div className="p-3 rounded-lg bg-[#FDF8EC] dark:bg-[#201D17] border border-[#C6A667]/50 text-xs text-[#111111] dark:text-[#FAF8F3] flex items-center gap-2 font-medium">
+                          <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                           <span>{bulkImportStatus}</span>
                         </div>
                       )}
@@ -2903,7 +3113,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           type="button"
                           onClick={handleExecuteExcelImport}
                           disabled={isSubmittingExcel}
-                          className="w-full sm:w-auto px-8 py-3 rounded-xl bg-[#C6A667] hover:bg-[#E2CCA1] text-[#111111] font-bold text-sm shadow-lg hover:shadow-[#C6A667]/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                          className="w-full sm:w-auto px-8 py-3 rounded-xl bg-[#C6A667] hover:bg-[#B89347] text-[#111111] font-bold text-sm shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                         >
                           {isSubmittingExcel ? (
                             <>
@@ -2922,7 +3132,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           type="button"
                           onClick={handleClearExcel}
                           disabled={isSubmittingExcel}
-                          className="w-full sm:w-auto px-5 py-3 rounded-xl bg-[#1D1F2C] hover:bg-[#252838] text-stone-300 hover:text-white text-xs font-semibold transition-colors cursor-pointer"
+                          className="w-full sm:w-auto px-5 py-3 rounded-xl bg-[#FAF8F3] dark:bg-[#121319] hover:bg-[#EFE9DD] dark:hover:bg-[#232632] border border-[#E0D6C3] dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:text-[#111111] dark:hover:text-white text-xs font-semibold transition-colors cursor-pointer"
                         >
                           إلغاء والبدء من جديد
                         </button>
@@ -2940,17 +3150,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 
                 {/* Header Information */}
-                <div className="p-5 rounded-2xl bg-[#14161C] border border-stone-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="p-5 rounded-2xl bg-white dark:bg-[#1B1D25] border border-[#E8DEC9] dark:border-stone-800 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-lg bg-[#D4AF37]/10 border border-[#D4AF37]/30 flex items-center justify-center text-[#D4AF37]">
+                      <div className="w-8 h-8 rounded-lg bg-[#FDF8EC] dark:bg-[#201D17] border border-[#C6A667]/50 flex items-center justify-center text-[#8A6A2E] dark:text-[#C6A667]">
                         <ImageIcon className="w-4 h-4" />
                       </div>
-                      <h3 className="text-base font-bold text-[#FAF6ED]">
+                      <h3 className="text-base font-bold text-[#111111] dark:text-[#FAF8F3]">
                         مكتبة ورفع الصور من جهاز الكمبيوتر
                       </h3>
                     </div>
-                    <p className="text-xs text-stone-400 leading-relaxed">
+                    <p className="text-xs text-stone-600 dark:text-stone-400 leading-relaxed">
                       ارفع صور المشغولات والسبائك مباشرة من جهاز الكمبيوتر أو الهاتف دفعة واحدة أو بشكل فردي. يتم حفظ الصور في مجلد الميديا بالمتجر فوراً.
                     </p>
                   </div>
@@ -2960,13 +3170,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       type="button"
                       onClick={fetchMediaFiles}
                       disabled={isLoadingMedia}
-                      className="px-3 py-2 rounded-lg bg-[#1B1D26] hover:bg-[#252838] border border-stone-700 text-stone-300 text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                      className="px-3 py-2 rounded-lg bg-[#FAF8F3] dark:bg-[#121319] hover:bg-[#EFE9DD] dark:hover:bg-[#232632] border border-[#E0D6C3] dark:border-stone-700 text-stone-700 dark:text-stone-300 text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${isLoadingMedia ? 'animate-spin' : ''}`} />
                       <span>تحديث المعرض</span>
                     </button>
 
-                    <label className="px-4 py-2 rounded-lg bg-[#D4AF37] hover:bg-[#F3E5AB] text-black font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md transition-colors">
+                    <label className="px-4 py-2 rounded-lg bg-[#C6A667] hover:bg-[#B89347] text-[#111111] font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-sm transition-colors">
                       <Upload className="w-4 h-4" />
                       <span>اختيار صور من الكمبيوتر</span>
                       <input
@@ -2986,7 +3196,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
 
                 {/* Upload Zone */}
-                <div className="p-6 rounded-2xl bg-[#14161C] border border-stone-800 space-y-4">
+                <div className="p-6 rounded-2xl bg-white dark:bg-[#1B1D25] border border-[#E8DEC9] dark:border-stone-800 shadow-xs space-y-4">
                   <div
                     onDragOver={(e) => {
                       e.preventDefault();
@@ -2999,25 +3209,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         processSelectedBatchFiles(Array.from(e.dataTransfer.files));
                       }
                     }}
-                    className="border-2 border-dashed border-stone-700 hover:border-[#D4AF37]/60 rounded-xl p-8 text-center bg-[#101117] transition-all flex flex-col items-center justify-center space-y-3 cursor-pointer"
+                    className="border-2 border-dashed border-[#D6C9B0] dark:border-stone-700 hover:border-[#C6A667] dark:hover:border-[#C6A667] rounded-xl p-8 text-center bg-[#FAF8F3] dark:bg-[#121319] hover:bg-[#FDFBF6] dark:hover:bg-[#191B23] transition-all flex flex-col items-center justify-center space-y-3 cursor-pointer"
                     onClick={() => {
                       const input = document.getElementById('batch-media-file-input');
                       if (input) input.click();
                     }}
                   >
-                    <div className="w-14 h-14 rounded-full bg-[#D4AF37]/10 border border-[#D4AF37]/20 flex items-center justify-center text-[#D4AF37]">
+                    <div className="w-14 h-14 rounded-full bg-[#FDF8EC] dark:bg-[#201D17] border border-[#C6A667]/40 flex items-center justify-center text-[#8A6A2E] dark:text-[#C6A667]">
                       <UploadCloud className="w-7 h-7" />
                     </div>
                     <div>
-                      <p className="text-sm font-bold text-stone-200">
+                      <p className="text-sm font-bold text-[#111111] dark:text-[#FAF8F3]">
                         اسحب وأفلت صور الذهب هنا، أو اضغط لاختيار الصور من الكمبيوتر
                       </p>
-                      <p className="text-xs text-stone-400 mt-1">
+                      <p className="text-xs text-stone-500 dark:text-stone-400 mt-1">
                         يمكنك اختيار عدة صور في وقت واحد (JPG, PNG, WEBP)
                       </p>
                     </div>
 
-                    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#1A1C25] border border-stone-700 text-[11px] text-[#D4AF37]">
+                    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white dark:bg-[#1B1D25] border border-[#E8DEC9] dark:border-stone-700 text-[11px] text-[#8A6A2E] dark:text-[#E2CCA1] font-medium">
                       <Sparkles className="w-3.5 h-3.5" />
                       <span>ميزة ذكية: تسمية الصورة بكود الصنف (مثلاً RNG-1804.jpg) يربطها تلقائياً بالقطعة كغلاف</span>
                     </div>
@@ -3039,16 +3249,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   {/* Batch Selection Queue */}
                   {batchFiles.length > 0 && (
-                    <div className="space-y-4 pt-4 border-t border-stone-800">
+                    <div className="space-y-4 pt-4 border-t border-[#E8DEC9] dark:border-stone-800">
                       <div className="flex items-center justify-between">
-                        <h4 className="text-xs font-bold text-[#FAF6ED] flex items-center gap-2">
-                          <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
+                        <h4 className="text-xs font-bold text-[#111111] dark:text-[#FAF8F3] flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-[#8A6A2E] dark:text-[#C6A667]" />
                           <span>الصور المختارة للرفع ({batchFiles.length} صورة):</span>
                         </h4>
                         <button
                           type="button"
                           onClick={() => setBatchFiles([])}
-                          className="text-xs text-rose-400 hover:text-rose-300 cursor-pointer"
+                          className="text-xs text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 font-medium cursor-pointer"
                         >
                           تفريغ القائمة
                         </button>
@@ -3058,19 +3268,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         {batchFiles.map((item, idx) => (
                           <div
                             key={item.id}
-                            className="p-2.5 rounded-xl bg-[#1B1D27] border border-stone-700 flex flex-col justify-between space-y-2 text-xs"
+                            className="p-2.5 rounded-xl bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800 flex flex-col justify-between space-y-2 text-xs"
                           >
                             <div className="flex items-center gap-2.5">
                               <img
                                 src={item.previewUrl}
                                 alt={item.name}
-                                className="w-14 h-14 rounded-lg object-cover border border-stone-600 shrink-0"
+                                className="w-14 h-14 rounded-lg object-cover border border-[#E0D6C3] dark:border-stone-700 shrink-0"
                               />
                               <div className="overflow-hidden min-w-0">
-                                <p className="font-semibold text-white truncate" title={item.name}>
+                                <p className="font-semibold text-[#111111] dark:text-[#FAF8F3] truncate" title={item.name}>
                                   {item.name}
                                 </p>
-                                <p className="text-[10px] text-stone-400">
+                                <p className="text-[10px] text-stone-500 dark:text-stone-400">
                                   {(item.size / 1024).toFixed(1)} KB
                                 </p>
                               </div>
@@ -3078,7 +3288,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                             {/* Product matching dropdown */}
                             <div>
-                              <label className="block text-[10px] text-stone-400 mb-0.5">
+                              <label className="block text-[10px] text-stone-600 dark:text-stone-400 mb-0.5">
                                 ربط بالقطعة:
                               </label>
                               <select
@@ -3089,7 +3299,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     prev.map((f, i) => (i === idx ? { ...f, matchedProductCode: val } : f))
                                   );
                                 }}
-                                className="w-full bg-[#121319] border border-stone-600 rounded p-1 text-[11px] text-white focus:border-[#D4AF37] outline-none"
+                                className="w-full bg-white dark:bg-[#1B1D25] border border-[#E0D6C3] dark:border-stone-700 rounded p-1 text-[11px] text-[#111111] dark:text-white focus:border-[#C6A667] outline-none"
                               >
                                 <option value="">(حفظ بالمعرض فقط دون ربط)</option>
                                 {products.map((p) => (
@@ -3105,7 +3315,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               onClick={() => {
                                 setBatchFiles((prev) => prev.filter((_, i) => i !== idx));
                               }}
-                              className="text-[10px] text-stone-400 hover:text-rose-400 text-left pt-1 flex items-center gap-1 cursor-pointer"
+                              className="text-[10px] text-stone-500 dark:text-stone-400 hover:text-rose-600 dark:hover:text-rose-400 text-left pt-1 flex items-center gap-1 cursor-pointer"
                             >
                               <Trash2 className="w-3 h-3" />
                               <span>إلغاء هذه الصورة</span>
@@ -3120,7 +3330,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           type="button"
                           onClick={handleExecuteBatchUpload}
                           disabled={isUploadingBatch}
-                          className="w-full sm:w-auto px-8 py-3 rounded-xl bg-[#D4AF37] hover:bg-[#F3E5AB] text-black font-bold text-xs shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                          className="w-full sm:w-auto px-8 py-3 rounded-xl bg-[#C6A667] hover:bg-[#B89347] text-[#111111] font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                         >
                           {isUploadingBatch ? (
                             <>
@@ -3139,15 +3349,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           type="button"
                           onClick={() => setBatchFiles([])}
                           disabled={isUploadingBatch}
-                          className="w-full sm:w-auto px-4 py-3 rounded-xl bg-stone-800 text-stone-300 text-xs font-semibold hover:text-white transition-colors cursor-pointer"
+                          className="w-full sm:w-auto px-4 py-3 rounded-xl bg-[#FAF8F3] dark:bg-[#121319] hover:bg-[#EFE9DD] dark:hover:bg-[#232632] border border-[#E0D6C3] dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:text-[#111111] dark:hover:text-white text-xs font-semibold transition-colors cursor-pointer"
                         >
                           إلغاء
                         </button>
                       </div>
 
                       {batchUploadResult && (
-                        <div className="p-3 rounded-xl bg-[#1B1D29] border border-[#D4AF37]/40 text-xs text-[#FAF8F3] flex items-center gap-2">
-                          <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <div className="p-3 rounded-xl bg-[#FDF8EC] dark:bg-[#201D17] border border-[#C6A667]/50 text-xs text-[#111111] dark:text-[#FAF8F3] flex items-center gap-2 font-medium">
+                          <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                           <span>{batchUploadResult}</span>
                         </div>
                       )}
@@ -3156,40 +3366,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
 
                 {/* Stored Media Explorer */}
-                <div className="p-6 rounded-2xl bg-[#14161C] border border-stone-800 space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-800 pb-3">
+                <div className="p-6 rounded-2xl bg-white dark:bg-[#1B1D25] border border-[#E8DEC9] dark:border-stone-800 shadow-xs space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E8DEC9] dark:border-stone-800 pb-3">
                     <div>
-                      <h4 className="text-sm font-bold text-[#FAF6ED] flex items-center gap-2">
-                        <HardDrive className="w-4 h-4 text-[#D4AF37]" />
+                      <h4 className="text-sm font-bold text-[#111111] dark:text-[#FAF8F3] flex items-center gap-2">
+                        <HardDrive className="w-4 h-4 text-[#8A6A2E] dark:text-[#C6A667]" />
                         <span>معرض الصور المخزنة بالمتجر ({combinedMediaFiles.length} صورة)</span>
                       </h4>
-                      <p className="text-[11px] text-stone-400">
+                      <p className="text-[11px] text-stone-600 dark:text-stone-400">
                         جميع الصور المرفوعة من جهاز الكمبيوتر متاحة هنا، ويمكنك نسخ رابط أي صورة أو تعيينها لأي قطعة ذهب.
                       </p>
                     </div>
 
                     <div className="w-full sm:w-64 relative">
-                      <Search className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-stone-400" />
+                      <Search className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 dark:text-stone-500" />
                       <input
                         type="text"
                         value={mediaSearch}
                         onChange={(e) => setMediaSearch(e.target.value)}
                         placeholder="بحث في أسماء الصور..."
-                        className="w-full bg-[#1A1C24] border border-stone-700 rounded-lg pr-8 pl-3 py-1.5 text-xs text-white placeholder-stone-500 focus:border-[#D4AF37] outline-none"
+                        className="w-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E0D6C3] dark:border-stone-700 rounded-lg pr-8 pl-3 py-1.5 text-xs text-[#111111] dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:border-[#C6A667] outline-none"
                       />
                     </div>
                   </div>
 
                   {isLoadingMedia && combinedMediaFiles.length === 0 ? (
-                    <div className="p-8 text-center text-xs text-stone-400 flex items-center justify-center gap-2">
-                      <RefreshCw className="w-4 h-4 animate-spin text-[#D4AF37]" />
+                    <div className="p-8 text-center text-xs text-stone-600 dark:text-stone-400 flex items-center justify-center gap-2">
+                      <RefreshCw className="w-4 h-4 animate-spin text-[#8A6A2E] dark:text-[#C6A667]" />
                       <span>جارٍ جلب مكتبة الصور...</span>
                     </div>
                   ) : combinedMediaFiles.length === 0 ? (
-                    <div className="p-8 text-center text-xs text-stone-500 space-y-2">
-                      <ImageIcon className="w-8 h-8 mx-auto text-stone-600" />
+                    <div className="p-8 text-center text-xs text-stone-500 dark:text-stone-400 space-y-2">
+                      <ImageIcon className="w-8 h-8 mx-auto text-stone-400 dark:text-stone-500" />
                       <p>لا توجد صور مرفوعة بعد من الكمبيوتر.</p>
-                      <p className="text-[11px] text-stone-600">
+                      <p className="text-[11px] text-stone-500 dark:text-stone-400">
                         استخدم صندوق الرفع بالأعلى لرفع أول مجموعة صور من جهازك!
                       </p>
                     </div>
@@ -3202,9 +3412,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         .map((file) => (
                           <div
                             key={file.url}
-                            className="rounded-xl overflow-hidden bg-[#181922] border border-stone-800 hover:border-[#D4AF37]/50 transition-all flex flex-col justify-between group"
+                            className="rounded-xl overflow-hidden bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800 hover:border-[#C6A667] transition-all flex flex-col justify-between group"
                           >
-                            <div className="relative aspect-square bg-black overflow-hidden">
+                            <div className="relative aspect-square bg-[#F4F1EA] dark:bg-[#191B23] overflow-hidden">
                               <img
                                 src={file.url}
                                 alt={file.filename}
@@ -3216,12 +3426,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <div className="p-2.5 space-y-2 text-xs">
                               <div className="overflow-hidden">
                                 <p
-                                  className="text-[11px] font-semibold text-stone-200 truncate"
+                                  className="text-[11px] font-semibold text-[#111111] dark:text-[#FAF8F3] truncate"
                                   title={file.filename}
                                 >
                                   {file.filename}
                                 </p>
-                                <p className="text-[10px] text-stone-500">
+                                <p className="text-[10px] text-stone-500 dark:text-stone-400">
                                   {(file.size / 1024).toFixed(1)} KB
                                 </p>
                               </div>
@@ -3230,13 +3440,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => handleCopyUrl(file.url)}
-                                  className="flex-1 py-1 px-1.5 rounded bg-[#222430] hover:bg-[#2C2F40] text-stone-200 text-[10px] flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                                  className="flex-1 py-1 px-1.5 rounded bg-white dark:bg-[#1B1D25] hover:bg-[#EFE9DD] dark:hover:bg-[#232632] border border-[#E0D6C3] dark:border-stone-700 text-stone-700 dark:text-stone-300 text-[10px] flex items-center justify-center gap-1 transition-colors cursor-pointer"
                                   title="نسخ الرابط المباشر للصورة"
                                 >
                                   {copiedUrl === file.url ? (
                                     <>
-                                      <Check className="w-3 h-3 text-emerald-400" />
-                                      <span className="text-emerald-400">تم</span>
+                                      <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                                      <span className="text-emerald-700 dark:text-emerald-300 font-bold">تم</span>
                                     </>
                                   ) : (
                                     <>
@@ -3250,7 +3460,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   href={file.url}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="p-1 rounded bg-[#222430] hover:bg-[#2C2F40] text-stone-400 hover:text-white transition-colors"
+                                  className="p-1 rounded bg-white dark:bg-[#1B1D25] hover:bg-[#EFE9DD] dark:hover:bg-[#232632] border border-[#E0D6C3] dark:border-stone-700 text-stone-600 dark:text-stone-400 hover:text-[#111111] dark:hover:text-white transition-colors"
                                   title="عرض بالحجم الكامل"
                                 >
                                   <ExternalLink className="w-3 h-3" />
@@ -3258,8 +3468,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               </div>
 
                               {/* Assign to product dropdown */}
-                              <div className="pt-1 border-t border-stone-800">
-                                <label className="block text-[9px] text-stone-500 mb-0.5">
+                              <div className="pt-1 border-t border-[#E8DEC9] dark:border-stone-800">
+                                <label className="block text-[9px] text-stone-500 dark:text-stone-400 mb-0.5">
                                   تعيين كغلاف لقطعة:
                                 </label>
                                 <select
@@ -3270,7 +3480,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       e.target.value = '';
                                     }
                                   }}
-                                  className="w-full bg-[#121318] border border-stone-700 rounded p-1 text-[10px] text-stone-300 focus:border-[#D4AF37] outline-none"
+                                  className="w-full bg-white dark:bg-[#1B1D25] border border-[#E0D6C3] dark:border-stone-700 rounded p-1 text-[10px] text-[#111111] dark:text-white focus:border-[#C6A667] outline-none"
                                 >
                                   <option value="">اختر القطعة...</option>
                                   {products.map((p) => (

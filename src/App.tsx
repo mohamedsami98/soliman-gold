@@ -47,6 +47,28 @@ export default function App() {
   const [onlyOffers, setOnlyOffers] = useState<boolean>(false);
   const [sortOption, setSortOption] = useState<string>('default');
 
+  // Theme Mode State ('light' | 'dark' stored in localStorage)
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      return localStorage.getItem('soliman_theme') === 'dark' ? 'dark' : 'light';
+    } catch {
+      return 'light';
+    }
+  });
+
+  useEffect(() => {
+    try {
+      document.documentElement.classList.toggle('dark', theme === 'dark');
+      localStorage.setItem('soliman_theme', theme);
+    } catch (e) {
+      console.error('Failed to persist theme preference', e);
+    }
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
+  };
+
   // Modals State
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isCartOpen, setIsCartOpen] = useState(false);
@@ -213,8 +235,8 @@ export default function App() {
 
   if (loading && !settings) {
     return (
-      <div className="min-h-screen bg-[#111111] flex flex-col items-center justify-center text-[#C6A667] space-y-4">
-        <div className="w-12 h-12 rounded-full border-2 border-[#C6A667]/30 border-t-[#C6A667] animate-spin" />
+      <div className="min-h-screen bg-[#FAF8F3] dark:bg-[#111111] flex flex-col items-center justify-center text-[#8A6A2E] dark:text-[#C6A667] space-y-4">
+        <div className="w-12 h-12 rounded-full border-2 border-[#C6A667]/30 border-t-[#9E7F43] dark:border-t-[#C6A667] animate-spin" />
         <span className="text-sm font-['Cinzel',serif] tracking-[0.2em] uppercase">
           SOLIMAN GOLD · جاري التحميل...
         </span>
@@ -247,12 +269,14 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#111111] text-[#FAF8F3] flex flex-col font-['Cairo',sans-serif]">
+    <div className="min-h-screen bg-[#FAF8F3] dark:bg-[#111111] text-[#1A1A1A] dark:text-[#FAF8F3] flex flex-col font-['Cairo',sans-serif] transition-colors duration-200">
       
-      {/* 1. Header & Navigation (Dark Luxury with Centered Brand Logo) */}
+      {/* 1. Header & Navigation */}
       <Navbar
         settings={currentSettings}
         cartCount={cart.reduce((acc, item) => acc + item.quantity, 0)}
+        theme={theme}
+        onToggleTheme={toggleTheme}
         onOpenCart={() => setIsCartOpen(true)}
         onOpenAdmin={() => setIsAdminOpen(true)}
         onNavigateToCatalog={handleNavigateToCatalog}
@@ -262,10 +286,10 @@ export default function App() {
       <main className="flex-1">
         
         {/* ======================================================== */}
-        {/* SECTION 1: HOMEPAGE — DARK LUXURY (#111111)              */}
+        {/* SECTION 1: HOMEPAGE — LIGHT LUXURY (#FAF8F3)             */}
         {/* ======================================================== */}
         
-        {/* Cinematic Hero Banner */}
+        {/* Hero Banner */}
         <HeroBanner
           settings={currentSettings}
           onExploreCatalog={() => handleNavigateToCatalog('all')}
@@ -273,7 +297,7 @@ export default function App() {
           onOpenGoldRates={() => setIsGoldRatesOpen(true)}
         />
 
-        {/* Categories Bar in Dark Luxury */}
+        {/* Categories Bar */}
         <CategoriesBar
           categories={categories}
           selectedCategory={selectedCategory}
@@ -285,28 +309,28 @@ export default function App() {
           }}
         />
 
-        {/* Featured Product Collections in Dark Luxury Cards */}
+        {/* Featured Product Collections */}
         {featuredProducts.length > 0 && selectedCategory === 'all' && !searchQuery && (
-          <section className="py-14 bg-[#141414] border-b border-[#C6A667]/20">
+          <section className="py-14 bg-white dark:bg-[#141414] border-b border-[#E8DEC9] dark:border-stone-800/80 transition-colors">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
               <div className="flex flex-col sm:flex-row items-baseline justify-between gap-4 mb-8 text-right">
                 <div>
                   <div className="flex items-center gap-2 mb-1">
-                    <Sparkles className="w-4 h-4 text-[#C6A667]" />
-                    <span className="text-xs font-semibold text-[#C6A667] uppercase tracking-widest font-['Cinzel',serif]">
+                    <Sparkles className="w-4 h-4 text-[#9E7F43] dark:text-[#C6A667]" />
+                    <span className="text-xs font-bold text-[#9E7F43] dark:text-[#C6A667] uppercase tracking-widest font-['Cinzel',serif]">
                       ROYAL SELECTION 2026
                     </span>
                   </div>
-                  <h2 className="text-2xl sm:text-3xl font-bold text-[#FAF8F3] font-serif">
+                  <h2 className="text-2xl sm:text-3xl font-bold text-[#111111] dark:text-[#FAF8F3] font-serif">
                     انتقاءات سليمان جولد المميزة
                   </h2>
                 </div>
 
                 <button
                   onClick={() => handleNavigateToCatalog('all')}
-                  className="text-xs font-semibold text-[#C6A667] hover:text-[#E2CCA1] transition-colors cursor-pointer flex items-center gap-1.5"
+                  className="text-xs font-bold text-[#8A6A2E] dark:text-[#C6A667] hover:text-[#111111] dark:hover:text-[#E2CCA1] transition-colors cursor-pointer flex items-center gap-1.5"
                 >
-                  <span>عرض الكتالوج الكامل بالعاجي الفاخر</span>
+                  <span>عرض الكتالوج الكامل</span>
                   <ArrowLeft className="w-3.5 h-3.5" />
                 </button>
               </div>
@@ -318,7 +342,7 @@ export default function App() {
                     key={product.id}
                     product={product}
                     settings={currentSettings}
-                    variant="dark"
+                    variant={theme}
                     onViewDetails={(p) => setSelectedProduct(p)}
                     onAddToCart={handleAddToCart}
                   />
@@ -328,47 +352,44 @@ export default function App() {
           </section>
         )}
 
-        {/* Seamless Visual Transition Banner into Warm Ivory */}
-        <div className="relative h-20 bg-gradient-to-b from-[#141414] to-[#FAF8F3] overflow-hidden" />
-
         {/* ======================================================== */}
-        {/* SECTION 2: PRODUCT CATALOG — LIGHT LUXURY (#FAF8F3 IVORY)*/}
+        {/* SECTION 2: PRODUCT CATALOG — DUAL LUXURY IVORY / OBSIDIAN */}
         {/* ======================================================== */}
         
-        <section id="catalog-section" className="py-16 bg-[#FAF8F3] text-[#1A1A1A] transition-colors">
+        <section id="catalog-section" className="py-16 bg-[#FAF8F3] dark:bg-[#111111] text-[#1A1A1A] dark:text-[#FAF8F3] transition-colors">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
             
             {/* Catalog Header */}
-            <div className="flex flex-col md:flex-row items-stretch md:items-end justify-between gap-6 pb-6 border-b border-[#E8DEC9] text-right">
+            <div className="flex flex-col md:flex-row items-stretch md:items-end justify-between gap-6 pb-6 border-b border-[#E8DEC9] dark:border-stone-800 text-right">
               <div>
                 <div className="flex items-center gap-2 mb-1.5">
                   <span className="w-6 h-[1.5px] bg-[#C6A667]" />
-                  <span className="text-xs font-bold text-[#9E7F43] uppercase tracking-widest font-['Cinzel',serif]">
+                  <span className="text-xs font-bold text-[#9E7F43] dark:text-[#C6A667] uppercase tracking-widest font-['Cinzel',serif]">
                     SOLIMAN DIGITAL SHOWROOM
                   </span>
                 </div>
-                <h2 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-[#111111] font-serif">
+                <h2 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-[#111111] dark:text-[#FAF8F3] font-serif">
                   كتالوج المجوهرات والذهب
                 </h2>
-                <p className="text-xs sm:text-sm text-stone-600 mt-1 max-w-xl font-light">
+                <p className="text-xs sm:text-sm text-stone-600 dark:text-stone-400 mt-1 max-w-xl font-light">
                   تصفح أرقى تشكيلات الذهب الخالص عيار 18 و 21 و 24 بالصور والأسعار المحدثة، واطلب فوراً عبر واتساب
                 </p>
               </div>
 
               {/* Search Bar by Name or Code */}
               <div className="relative w-full md:w-80">
-                <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
+                <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400 dark:text-stone-500" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="ابحث بالاسم أو كود القطعة..."
-                  className="w-full bg-white border border-[#E0D6C3] rounded-xl pr-10 pl-4 py-2.5 text-xs text-[#111111] placeholder-stone-400 focus:border-[#C6A667] focus:ring-1 focus:ring-[#C6A667] outline-none transition-all shadow-sm"
+                  className="w-full bg-white dark:bg-[#181920] border border-[#E0D6C3] dark:border-stone-700 rounded-xl pr-10 pl-4 py-2.5 text-xs text-[#111111] dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:border-[#C6A667] focus:ring-1 focus:ring-[#C6A667] outline-none transition-all shadow-sm"
                 />
                 {searchQuery && (
                   <button
                     onClick={() => setSearchQuery('')}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-black text-xs cursor-pointer"
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-black dark:hover:text-white text-xs cursor-pointer"
                   >
                     مسح
                   </button>
@@ -382,8 +403,8 @@ export default function App() {
                 onClick={() => setSelectedCategory('all')}
                 className={`px-3.5 py-1.5 rounded-xl border whitespace-nowrap transition-all cursor-pointer font-medium ${
                   selectedCategory === 'all'
-                    ? 'bg-[#111111] text-[#FAF8F3] border-[#111111] shadow-sm font-bold'
-                    : 'bg-white text-stone-700 border-[#E8DEC9] hover:border-[#C6A667]'
+                    ? 'bg-[#C6A667] text-[#111111] border-[#C6A667] shadow-sm font-bold'
+                    : 'bg-white dark:bg-[#181920] text-stone-700 dark:text-stone-300 border-[#E8DEC9] dark:border-stone-800 hover:border-[#C6A667] dark:hover:border-[#C6A667]'
                 }`}
               >
                 الكل ({products.length})
@@ -400,7 +421,7 @@ export default function App() {
                       className={`px-3 py-1.5 rounded-xl border whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
                         isSelected
                           ? 'bg-[#C6A667] text-[#111111] border-[#C6A667] font-bold shadow-sm'
-                          : 'bg-white text-stone-700 border-[#E8DEC9] hover:border-[#C6A667] hover:bg-[#FAF8F3]'
+                          : 'bg-white dark:bg-[#181920] text-stone-700 dark:text-stone-300 border-[#E8DEC9] dark:border-stone-800 hover:border-[#C6A667] dark:hover:border-[#C6A667] hover:bg-[#FAF8F3] dark:hover:bg-[#1F212B]'
                       }`}
                     >
                       <span>{cat.name}</span>
@@ -409,7 +430,7 @@ export default function App() {
                           className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold ${
                             isSelected
                               ? 'bg-[#111111]/15 text-[#111111]'
-                              : 'bg-stone-100 text-stone-500'
+                              : 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400'
                           }`}
                         >
                           {count}
@@ -421,21 +442,21 @@ export default function App() {
             </div>
 
             {/* Filter Controls Bar */}
-            <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl bg-white border border-[#E8DEC9] text-xs shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl bg-white dark:bg-[#181920] border border-[#E8DEC9] dark:border-stone-800 text-xs shadow-sm transition-colors">
               
               {/* Category & Karat Filters */}
               <div className="flex flex-wrap items-center gap-3">
                 
                 {/* Karat selector */}
                 <div className="flex items-center gap-1.5">
-                  <span className="text-stone-500 font-medium">العيار:</span>
-                  <div className="flex items-center gap-1 bg-[#FAF8F3] p-1 rounded-lg border border-[#E8DEC9]">
+                  <span className="text-stone-500 dark:text-stone-400 font-medium">العيار:</span>
+                  <div className="flex items-center gap-1 bg-[#FAF8F3] dark:bg-[#121319] p-1 rounded-lg border border-[#E8DEC9] dark:border-stone-800">
                     <button
                       onClick={() => setSelectedKarat('all')}
                       className={`px-2.5 py-1 rounded text-xs transition-colors cursor-pointer ${
                         selectedKarat === 'all'
                           ? 'bg-[#C6A667] text-[#111111] font-bold shadow-sm'
-                          : 'text-stone-600 hover:text-black'
+                          : 'text-stone-600 dark:text-stone-400 hover:text-black dark:hover:text-white'
                       }`}
                     >
                       الكل
@@ -445,7 +466,7 @@ export default function App() {
                       className={`px-2.5 py-1 rounded text-xs font-mono transition-colors cursor-pointer ${
                         selectedKarat === '24'
                           ? 'bg-[#C6A667] text-[#111111] font-bold shadow-sm'
-                          : 'text-stone-600 hover:text-black'
+                          : 'text-stone-600 dark:text-stone-400 hover:text-black dark:hover:text-white'
                       }`}
                     >
                       24k
@@ -455,7 +476,7 @@ export default function App() {
                       className={`px-2.5 py-1 rounded text-xs font-mono transition-colors cursor-pointer ${
                         selectedKarat === '21'
                           ? 'bg-[#C6A667] text-[#111111] font-bold shadow-sm'
-                          : 'text-stone-600 hover:text-black'
+                          : 'text-stone-600 dark:text-stone-400 hover:text-black dark:hover:text-white'
                       }`}
                     >
                       21k
@@ -465,7 +486,7 @@ export default function App() {
                       className={`px-2.5 py-1 rounded text-xs font-mono transition-colors cursor-pointer ${
                         selectedKarat === '18'
                           ? 'bg-[#C6A667] text-[#111111] font-bold shadow-sm'
-                          : 'text-stone-600 hover:text-black'
+                          : 'text-stone-600 dark:text-stone-400 hover:text-black dark:hover:text-white'
                       }`}
                     >
                       18k
@@ -478,11 +499,11 @@ export default function App() {
                   onClick={() => setOnlyInStock(!onlyInStock)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-colors cursor-pointer ${
                     onlyInStock
-                      ? 'border-emerald-500 bg-emerald-50 text-emerald-800 font-bold'
-                      : 'border-[#E8DEC9] bg-[#FAF8F3] text-stone-600 hover:text-black'
+                      ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 font-bold'
+                      : 'border-[#E8DEC9] dark:border-stone-800 bg-[#FAF8F3] dark:bg-[#121319] text-stone-600 dark:text-stone-300 hover:text-black dark:hover:text-white'
                   }`}
                 >
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                   <span>المتوفر بالمحل</span>
                 </button>
 
@@ -491,8 +512,8 @@ export default function App() {
                   onClick={() => setOnlyOffers(!onlyOffers)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-colors cursor-pointer ${
                     onlyOffers
-                      ? 'border-[#C6A667] bg-amber-50 text-[#9E7F43] font-bold'
-                      : 'border-[#E8DEC9] bg-[#FAF8F3] text-stone-600 hover:text-black'
+                      ? 'border-[#C6A667] bg-amber-50 dark:bg-amber-950/40 text-[#9E7F43] dark:text-[#E2CCA1] font-bold'
+                      : 'border-[#E8DEC9] dark:border-stone-800 bg-[#FAF8F3] dark:bg-[#121319] text-stone-600 dark:text-stone-300 hover:text-black dark:hover:text-white'
                   }`}
                 >
                   <Tag className="w-3.5 h-3.5" />
@@ -502,12 +523,12 @@ export default function App() {
 
               {/* Sorting Select */}
               <div className="flex items-center gap-2">
-                <ArrowUpDown className="w-3.5 h-3.5 text-stone-400" />
-                <span className="text-stone-500">الترتيب:</span>
+                <ArrowUpDown className="w-3.5 h-3.5 text-stone-400 dark:text-stone-500" />
+                <span className="text-stone-500 dark:text-stone-400">الترتيب:</span>
                 <select
                   value={sortOption}
                   onChange={(e) => setSortOption(e.target.value)}
-                  className="bg-[#FAF8F3] border border-[#E8DEC9] rounded-lg py-1.5 px-3 text-xs text-[#111111] focus:border-[#C6A667] outline-none cursor-pointer"
+                  className="bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-700 rounded-lg py-1.5 px-3 text-xs text-[#111111] dark:text-[#FAF8F3] focus:border-[#C6A667] outline-none cursor-pointer"
                 >
                   <option value="default">الترتيب الافتراضي (الأحدث)</option>
                   {!currentSettings.hideAllPrices && (
@@ -524,12 +545,12 @@ export default function App() {
             </div>
 
             {/* Results Count & Active Filters Indicator */}
-            <div className="flex items-center justify-between text-xs text-stone-600">
+            <div className="flex items-center justify-between text-xs text-stone-600 dark:text-stone-400">
               <div>
-                عرض <strong className="text-[#111111] font-mono font-bold">{filteredProducts.length}</strong> قطعة مجوهرات
+                عرض <strong className="text-[#111111] dark:text-[#FAF8F3] font-mono font-bold">{filteredProducts.length}</strong> قطعة مجوهرات
                 {selectedCategory !== 'all' && (
                   <span>
-                    {' '}في تصنيف: <strong className="text-[#9E7F43]">{categories.find((c) => c.id === selectedCategory)?.name}</strong>
+                    {' '}في تصنيف: <strong className="text-[#9E7F43] dark:text-[#C6A667]">{categories.find((c) => c.id === selectedCategory)?.name}</strong>
                   </span>
                 )}
               </div>
@@ -543,7 +564,7 @@ export default function App() {
                     setOnlyOffers(false);
                     setSearchQuery('');
                   }}
-                  className="text-[#9E7F43] hover:underline cursor-pointer font-medium"
+                  className="text-[#9E7F43] dark:text-[#C6A667] hover:underline cursor-pointer font-medium"
                 >
                   إعادة ضبط جميع الفلاتر
                 </button>
@@ -552,13 +573,13 @@ export default function App() {
 
             {/* 4-Columns Desktop / 2-Columns Mobile Product Grid */}
             {filteredProducts.length === 0 ? (
-              <div className="p-16 rounded-2xl bg-white border border-[#E8DEC9] text-center space-y-4 shadow-sm">
-                <div className="w-16 h-16 rounded-full bg-[#FAF8F3] border border-[#E8DEC9] flex items-center justify-center mx-auto text-stone-400">
+              <div className="p-16 rounded-2xl bg-white dark:bg-[#181920] border border-[#E8DEC9] dark:border-stone-800 text-center space-y-4 shadow-sm">
+                <div className="w-16 h-16 rounded-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#E8DEC9] dark:border-stone-800 flex items-center justify-center mx-auto text-stone-400">
                   <Search className="w-8 h-8" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-[#111111]">لم نجد قطع مجوهرات تطابق بحثك</h3>
-                  <p className="text-xs text-stone-500 mt-1 max-w-sm mx-auto">
+                  <h3 className="text-base font-bold text-[#111111] dark:text-[#FAF8F3]">لم نجد قطع مجوهرات تطابق بحثك</h3>
+                  <p className="text-xs text-stone-500 dark:text-stone-400 mt-1 max-w-sm mx-auto">
                     جرب تغيير كلمات البحث أو إعادة تعيين الفلاتر لاستعراض الكتالوج بالكامل
                   </p>
                 </div>
@@ -582,7 +603,7 @@ export default function App() {
                     key={product.id}
                     product={product}
                     settings={currentSettings}
-                    variant="light"
+                    variant={theme}
                     onViewDetails={(p) => setSelectedProduct(p)}
                     onAddToCart={handleAddToCart}
                   />
@@ -594,56 +615,54 @@ export default function App() {
         </section>
 
         {/* ======================================================== */}
-        {/* SECTION 3: SUBTLE DARK HERITAGE & CRAFTSMANSHIP BRIDGE   */}
+        {/* SECTION 3: HERITAGE & CRAFTSMANSHIP                      */}
         {/* ======================================================== */}
         
-        <section className="py-16 bg-[#141414] text-[#FAF8F3] border-t border-b border-[#C6A667]/25 relative overflow-hidden">
-          <div className="absolute inset-0 bg-[radial-gradient(#C6A667_1px,transparent_1px)] [background-size:24px_24px] opacity-5 pointer-events-none" />
-
+        <section className="py-16 bg-[#F4EFE6] dark:bg-[#14151B] text-[#1A1A1A] dark:text-[#FAF8F3] border-t border-b border-[#E8DEC9] dark:border-stone-800 relative overflow-hidden transition-colors">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
               
               <div className="lg:col-span-7 space-y-4 text-right">
-                <span className="text-xs font-semibold text-[#C6A667] uppercase tracking-widest font-['Cinzel',serif]">
+                <span className="text-xs font-bold text-[#8A6A2E] dark:text-[#C6A667] uppercase tracking-widest font-['Cinzel',serif]">
                   SOLIMAN GOLD HERITAGE
                 </span>
-                <h3 className="text-2xl sm:text-3xl font-bold font-serif text-[#FAF8F3]">
+                <h3 className="text-2xl sm:text-3xl font-bold font-serif text-[#111111] dark:text-[#FAF8F3]">
                   حرفية الصاغة وسحر الذهب الخالص
                 </h3>
-                <p className="text-sm text-[#C8BFB0] font-light leading-relaxed">
+                <p className="text-sm text-stone-600 dark:text-stone-400 font-light leading-relaxed">
                   في سليمان جولد، نؤمن بأن كل قطعة ذهب ليست مجرد زينة، بل استثمار في الجمال واللحظات الخالدة. كل تصميم يتم تشكيله بإتقان يدوي ولمسات ليزر دقيقة، مع خضوعه التام لمعايير مصلحة الدمغة والموازين المصرية.
                 </p>
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 pt-4 text-xs">
-                  <div className="p-3.5 rounded-xl bg-[#1B1B1B] border border-stone-800">
-                    <span className="block font-bold text-[#C6A667] mb-1">عيار 21 الملكي</span>
-                    <span className="text-stone-400">الأكثر نقاءً وصلابة في المشغولات اليومية</span>
+                  <div className="p-3.5 rounded-xl bg-white dark:bg-[#1B1D25] border border-[#E8DEC9] dark:border-stone-800 shadow-sm">
+                    <span className="block font-bold text-[#8A6A2E] dark:text-[#C6A667] mb-1">عيار 21 الملكي</span>
+                    <span className="text-stone-600 dark:text-stone-400">الأكثر نقاءً وصلابة في المشغولات اليومية</span>
                   </div>
-                  <div className="p-3.5 rounded-xl bg-[#1B1B1B] border border-stone-800">
-                    <span className="block font-bold text-[#C6A667] mb-1">عيار 18 الإيطالي</span>
-                    <span className="text-stone-400">أعلى درجات البريق والتطعيم الحجري</span>
+                  <div className="p-3.5 rounded-xl bg-white dark:bg-[#1B1D25] border border-[#E8DEC9] dark:border-stone-800 shadow-sm">
+                    <span className="block font-bold text-[#8A6A2E] dark:text-[#C6A667] mb-1">عيار 18 الإيطالي</span>
+                    <span className="text-stone-600 dark:text-stone-400">أعلى درجات البريق والتطعيم الحجري</span>
                   </div>
-                  <div className="p-3.5 rounded-xl bg-[#1B1B1B] border border-stone-800 col-span-2 sm:col-span-1">
-                    <span className="block font-bold text-[#C6A667] mb-1">سبائك عيار 24</span>
-                    <span className="text-stone-400">نقاء 999.9 للاستثمار والادخار الآمن</span>
+                  <div className="p-3.5 rounded-xl bg-white dark:bg-[#1B1D25] border border-[#E8DEC9] dark:border-stone-800 shadow-sm col-span-2 sm:col-span-1">
+                    <span className="block font-bold text-[#8A6A2E] dark:text-[#C6A667] mb-1">سبائك عيار 24</span>
+                    <span className="text-stone-600 dark:text-stone-400">نقاء 999.9 للاستثمار والادخار الآمن</span>
                   </div>
                 </div>
               </div>
 
               <div className="lg:col-span-5 flex justify-center">
-                <div className="p-6 rounded-2xl bg-[#1B1B1B] border border-[#C6A667]/30 max-w-sm text-center space-y-4 shadow-xl">
-                  <div className="w-12 h-12 rounded-full bg-[#C6A667]/10 border border-[#C6A667]/40 flex items-center justify-center mx-auto text-[#C6A667]">
+                <div className="p-6 rounded-2xl bg-white dark:bg-[#1B1D25] border border-[#C6A667]/40 max-w-sm text-center space-y-4 shadow-sm">
+                  <div className="w-12 h-12 rounded-full bg-[#FAF8F3] dark:bg-[#121319] border border-[#C6A667]/50 flex items-center justify-center mx-auto text-[#8A6A2E] dark:text-[#C6A667]">
                     <Shield className="w-6 h-6" />
                   </div>
-                  <h4 className="text-base font-bold text-[#FAF8F3] font-serif">
+                  <h4 className="text-base font-bold text-[#111111] dark:text-[#FAF8F3] font-serif">
                     ضمان الفاتورة المعتمدة
                   </h4>
-                  <p className="text-xs text-stone-400 leading-relaxed font-light">
+                  <p className="text-xs text-stone-600 dark:text-stone-400 leading-relaxed font-light">
                     تحصل مع كل قطعة على فاتورة رسمية مفصلة بالوزن، العيار، والسعر، تضمن لك حق إعادة البيع أو الاستبدال في أي وقت بأفضل سعر.
                   </p>
                   <button
                     onClick={() => handleNavigateToCatalog('all')}
-                    className="w-full py-2.5 rounded-lg bg-[#C6A667] hover:bg-[#E2CCA1] text-[#111111] font-bold text-xs transition-colors cursor-pointer"
+                    className="w-full py-2.5 rounded-lg bg-[#C6A667] hover:bg-[#B89347] text-[#111111] font-bold text-xs transition-colors cursor-pointer"
                   >
                     استكشف التشكيلة الآن
                   </button>
@@ -655,22 +674,22 @@ export default function App() {
         </section>
 
         {/* ======================================================== */}
-        {/* SECTION 4: SPECIAL OFFERS (LIGHT LUXURY IVORY)           */}
+        {/* SECTION 4: SPECIAL OFFERS                                */}
         {/* ======================================================== */}
         
         {offerProducts.length > 0 && (
-          <section className="py-14 bg-[#FAF8F3] border-b border-[#E8DEC9]">
+          <section className="py-14 bg-[#FAF8F3] dark:bg-[#111111] border-b border-[#E8DEC9] dark:border-stone-800 transition-colors">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
               <div className="flex flex-col sm:flex-row items-baseline justify-between gap-4 mb-8 text-right">
                 <div>
-                  <span className="text-xs font-semibold text-[#9E7F43] uppercase tracking-widest block mb-1 font-['Cinzel',serif]">
+                  <span className="text-xs font-semibold text-[#9E7F43] dark:text-[#C6A667] uppercase tracking-widest block mb-1 font-['Cinzel',serif]">
                     SPECIAL OFFERS & PROMOTIONS
                   </span>
-                  <h2 className="text-2xl sm:text-3xl font-bold text-[#111111] font-serif">
+                  <h2 className="text-2xl sm:text-3xl font-bold text-[#111111] dark:text-[#FAF8F3] font-serif">
                     عروض وخصومات سليمان جولد
                   </h2>
                 </div>
-                <p className="text-xs sm:text-sm text-stone-600 font-light">
+                <p className="text-xs sm:text-sm text-stone-600 dark:text-stone-400 font-light">
                   مصنعيات خاصة وأسعار استثنائية على تشكيلات مختارة لفترة محدودة
                 </p>
               </div>
@@ -682,7 +701,7 @@ export default function App() {
                     key={product.id}
                     product={product}
                     settings={currentSettings}
-                    variant="light"
+                    variant={theme}
                     onViewDetails={(p) => setSelectedProduct(p)}
                     onAddToCart={handleAddToCart}
                   />
@@ -728,6 +747,8 @@ export default function App() {
         settings={currentSettings}
         categories={categories}
         products={products}
+        theme={theme}
+        onToggleTheme={toggleTheme}
         onClose={() => setIsAdminOpen(false)}
         onRefreshData={() => {}}
       />
@@ -735,9 +756,11 @@ export default function App() {
       {/* 9. Floating WhatsApp Quick Contact Button */}
       <FloatingWhatsApp settings={currentSettings} />
 
-      {/* 10. Charcoal-Black Footer with Champagne Gold Typography */}
+      {/* 10. Footer */}
       <Footer
         settings={currentSettings}
+        theme={theme}
+        onToggleTheme={toggleTheme}
         onNavigateToCatalog={handleNavigateToCatalog}
         onOpenAdmin={() => setIsAdminOpen(true)}
         onOpenGoldRates={() => setIsGoldRatesOpen(true)}

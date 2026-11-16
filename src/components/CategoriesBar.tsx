@@ -70,16 +70,16 @@ export const CategoriesBar: React.FC<CategoriesBarProps> = ({
   const displayCategories = categories.filter((c) => c.id !== 'all');
 
   return (
-    <section className="py-12 bg-[#111111] border-b border-[#C6A667]/20 relative">
+    <section className="py-12 bg-[#FAF8F3] dark:bg-[#111111] border-b border-[#E8DEC9] dark:border-stone-800/80 relative transition-colors">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         
         {/* Section Header */}
         <div className="flex flex-col sm:flex-row items-baseline justify-between gap-4 mb-8 text-right">
           <div>
-            <span className="text-xs font-semibold text-[#C6A667] uppercase tracking-widest block mb-1">
+            <span className="text-xs font-bold text-[#8A6A2E] dark:text-[#C6A667] uppercase tracking-widest block mb-1">
               تشكيلات سليمان جولد
             </span>
-            <h2 className="text-2xl sm:text-3xl font-bold text-[#FAF8F3] font-serif">
+            <h2 className="text-2xl sm:text-3xl font-bold text-[#111111] dark:text-[#FAF8F3] font-serif">
               أقسام الذهب والمجوهرات (10 أقسام متخصصة)
             </h2>
           </div>
@@ -88,13 +88,13 @@ export const CategoriesBar: React.FC<CategoriesBarProps> = ({
               onClick={() => onSelectCategory('all')}
               className={`text-xs px-3.5 py-1.5 rounded-lg border transition-all cursor-pointer ${
                 selectedCategory === 'all'
-                  ? 'border-[#C6A667] bg-[#C6A667] text-[#111111] font-bold shadow-md'
-                  : 'border-stone-800 bg-[#161616] text-[#D5CEBF] hover:border-[#C6A667]/60 hover:text-white'
+                  ? 'border-[#C6A667] bg-[#C6A667] text-[#111111] font-bold shadow-sm'
+                  : 'border-[#E0D6C3] dark:border-stone-700 bg-white dark:bg-[#181920] text-stone-700 dark:text-stone-300 hover:border-[#C6A667] hover:text-[#111111] dark:hover:text-white'
               }`}
             >
               عرض كل المعروضات
             </button>
-            <p className="hidden md:block text-xs sm:text-sm text-[#B8AE9D] max-w-sm font-light">
+            <p className="hidden md:block text-xs sm:text-sm text-stone-600 dark:text-stone-400 max-w-sm font-light">
               انتقاءات استثنائية من أرقى ورش الصاغة بتصاميم تناسب كل مناسبة
             </p>
           </div>
@@ -110,15 +110,15 @@ export const CategoriesBar: React.FC<CategoriesBarProps> = ({
               <button
                 key={cat.id}
                 onClick={() => onSelectCategory(cat.id)}
-                className={`group relative flex flex-col items-center justify-between p-3 rounded-xl border text-center transition-all cursor-pointer overflow-hidden min-h-[105px] ${
+                className={`group relative flex flex-col items-center justify-between p-3 rounded-xl border text-center transition-all cursor-pointer overflow-hidden min-h-[105px] shadow-xs ${
                   isSelected
-                    ? 'border-[#C6A667] bg-gradient-to-b from-[#252016] to-[#181818] shadow-[0_0_20px_rgba(198,166,103,0.3)] scale-[1.02]'
-                    : 'border-stone-800/90 bg-[#161616] hover:border-[#C6A667]/50 hover:bg-[#1C1C1C]'
+                    ? 'border-[#C6A667] bg-[#FDF8EC] dark:bg-[#201D17] shadow-md shadow-[#C6A667]/15 scale-[1.02]'
+                    : 'border-[#E8DEC9] dark:border-stone-800 bg-white dark:bg-[#16171F] hover:border-[#C6A667] hover:bg-[#FAF8F3] dark:hover:bg-[#1D1F28]'
                 }`}
               >
                 {bgImg && (
                   <div
-                    className="absolute inset-0 bg-cover bg-center opacity-10 group-hover:opacity-25 transition-opacity duration-300"
+                    className="absolute inset-0 bg-cover bg-center opacity-[0.06] dark:opacity-[0.08] group-hover:opacity-[0.14] dark:group-hover:opacity-[0.18] transition-opacity duration-300"
                     style={{ backgroundImage: `url(${bgImg})` }}
                   />
                 )}
@@ -127,7 +127,7 @@ export const CategoriesBar: React.FC<CategoriesBarProps> = ({
                   className={`relative z-10 w-10 h-10 rounded-full flex items-center justify-center mb-2 transition-transform duration-300 group-hover:scale-110 ${
                     isSelected
                       ? 'bg-[#C6A667] text-[#111111] shadow-sm'
-                      : 'bg-[#212121] text-[#C6A667] group-hover:bg-[#28251E]'
+                      : 'bg-[#F4EFE6] dark:bg-[#22242E] text-[#8A6A2E] dark:text-[#C6A667] group-hover:bg-[#EFE5D2] dark:group-hover:bg-[#2A2D38]'
                   }`}
                 >
                   {getIcon(cat.id)}
@@ -135,7 +135,9 @@ export const CategoriesBar: React.FC<CategoriesBarProps> = ({
 
                 <span
                   className={`relative z-10 text-xs font-bold leading-tight ${
-                    isSelected ? 'text-[#FAF8F3]' : 'text-[#D5CEBF] group-hover:text-[#FAF8F3]'
+                    isSelected
+                      ? 'text-[#111111] dark:text-[#E2CCA1]'
+                      : 'text-stone-700 dark:text-stone-300 group-hover:text-[#111111] dark:group-hover:text-white'
                   }`}
                 >
                   {cat.name}

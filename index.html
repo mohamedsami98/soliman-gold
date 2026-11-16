@@ -16,8 +16,15 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800;900&family=Cinzel:wght@500;600;700;800&family=Amiri:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    <script>
+      try {
+        if (localStorage.getItem('soliman_theme') === 'dark') {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) {}
+    </script>
   </head>
-  <body class="bg-[#111111] text-[#FAF8F3] font-['Cairo',sans-serif] antialiased selection:bg-[#C6A667]/30 selection:text-[#FAF8F3]">
+  <body class="bg-[#FAF8F3] dark:bg-[#111111] text-[#1A1A1A] dark:text-[#FAF8F3] font-['Cairo',sans-serif] antialiased selection:bg-[#C6A667]/25 selection:text-[#111111] dark:selection:text-[#FAF8F3] transition-colors duration-200">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

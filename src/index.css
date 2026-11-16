@@ -1,16 +1,16 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
   :root {
     --gold-champagne: #C6A667;
     --gold-light: #E2CCA1;
-    --gold-dark: #9E7F43;
+    --gold-dark: #8A6A2E;
     --charcoal-black: #111111;
-    --surface-dark: #191919;
-    --surface-dark-border: rgba(198, 166, 103, 0.22);
     --ivory-warm: #FAF8F3;
     --ivory-card: #FFFFFF;
-    --ivory-border: #EFE9DD;
+    --ivory-surface: #F4EFE6;
+    --ivory-border: #E8DEC9;
     --charcoal-text: #1A1A1A;
   }
 
@@ -20,19 +20,35 @@
   }
 
   body {
+    background-color: #FAF8F3;
+    color: #1A1A1A;
+    overflow-x: hidden;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  .dark body {
     background-color: #111111;
     color: #FAF8F3;
-    overflow-x: hidden;
   }
 }
 
-/* Luxury gold text gradient */
+/* Luxury gold text gradient optimized for both light and dark modes */
 .text-gold-champagne {
-  color: #C6A667;
+  color: #8A6A2E;
+}
+
+.dark .text-gold-champagne {
+  color: #E2CCA1;
 }
 
 .text-gold-gradient {
-  background: linear-gradient(135deg, #F5E8CE 0%, #C6A667 50%, #9E7F43 100%);
+  background: linear-gradient(135deg, #7C5B1F 0%, #B89347 50%, #8A6A2E 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.dark .text-gold-gradient {
+  background: linear-gradient(135deg, #E2CCA1 0%, #C6A667 50%, #F3E5AB 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -42,38 +58,57 @@
 }
 
 .gold-hover-glow:hover {
-  box-shadow: 0 10px 30px -5px rgba(198, 166, 103, 0.25);
+  box-shadow: 0 12px 28px -6px rgba(158, 127, 67, 0.2);
   border-color: #C6A667;
 }
 
 .gold-outline-btn {
-  border: 1.5px solid #C6A667;
-  color: #C6A667;
-  background: transparent;
+  border: 1.5px solid #9E7F43;
+  color: #856627;
+  background: #FFFFFF;
   transition: all 0.3s ease;
+}
+
+.dark .gold-outline-btn {
+  border: 1.5px solid #C6A667;
+  color: #E2CCA1;
+  background: #181920;
 }
 
 .gold-outline-btn:hover {
   background: #C6A667;
+  border-color: #C6A667;
   color: #111111;
-  box-shadow: 0 4px 20px rgba(198, 166, 103, 0.3);
+  box-shadow: 0 6px 18px rgba(198, 166, 103, 0.28);
 }
 
-/* Custom fine luxury scrollbar */
+/* Custom fine luxury scrollbar for light and dark themes */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #111111;
+  background: #F4EFE6;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: #14151B;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2D271D;
+  background: #D6C9B0;
   border-radius: 3px;
 }
 
+.dark ::-webkit-scrollbar-thumb {
+  background: #3A3D4A;
+}
+
 ::-webkit-scrollbar-thumb:hover {
+  background: #9E7F43;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
   background: #C6A667;
 }

@@ -274,6 +274,59 @@ export async function updateProductInFirestore(
   }
 }
 
+export function mergeProductImages(
+  existingImages: string[] | undefined,
+  newUrls: string[],
+  mode: 'replace' | 'append' = 'replace'
+): string[] {
+  const cleanNew = newUrls
+    .map((u) => (typeof u === 'string' ? u.trim() : ''))
+    .filter((u) => u.length > 0 && u.length <= 1000);
+
+  const existingReal = (Array.isArray(existingImages) ? existingImages : [])
+    .map((u) => (typeof u === 'string' ? u.trim() : ''))
+    .filter(
+      (u) =>
+        u.length > 0 &&
+        u.length <= 1000 &&
+        !u.includes('images.unsplash.com')
+    );
+
+  if (cleanNew.length === 0) {
+    return sanitizeImagesList(existingImages);
+  }
+
+  if (mode === 'append') {
+    const appended = cleanNew.filter((u) => !existingReal.includes(u));
+    return sanitizeImagesList([...existingReal, ...appended]);
+  }
+
+  // Replace primary/cover image while preserving any secondary gallery images
+  const remainingSecondary = existingReal
+    .slice(1)
+    .filter((u) => !cleanNew.includes(u));
+  return sanitizeImagesList([...cleanNew, ...remainingSecondary]);
+}
+
+export async function updateProductImagesInFirestore(
+  productId: string,
+  images: string[]
+): Promise<string[]> {
+  const id = sanitizeFirestoreId(productId, 'prod');
+  const path = `products/${id}`;
+  const sanitizedImages = sanitizeImagesList(images);
+
+  try {
+    await updateDoc(doc(db, 'products', id), {
+      images: sanitizedImages,
+      updatedAt: serverTimestamp(),
+    });
+    return sanitizedImages;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
 export async function deleteProductInFirestore(productId: string): Promise<void> {
   const id = sanitizeFirestoreId(productId, 'prod');
   const path = `products/${id}`;

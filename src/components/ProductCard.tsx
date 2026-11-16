@@ -126,7 +126,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </span>
           {product.weight > 0 && (
             <span className={`font-medium ${isLight ? 'text-stone-600' : 'text-stone-300'}`}>
-              الوزن الظاهر: <strong className="text-[#C6A667] font-mono">{product.weight}</strong> جم
+              الوزن الظاهر: <strong className={`${isLight ? 'text-[#8A6A2E]' : 'text-[#C6A667]'} font-mono`}>{product.weight}</strong> جم
             </span>
           )}
         </div>
@@ -153,7 +153,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         {/* Price Area */}
         <div className="pt-0.5">
           {product.hidePrice || settings.hideAllPrices ? (
-            <div className="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-[#C6A667]">
+            <div className={`flex items-center gap-1.5 text-xs sm:text-sm font-bold ${isLight ? 'text-[#8A6A2E]' : 'text-[#E2CCA1]'}`}>
               <MessageCircle className="w-3.5 h-3.5 text-[#25D366] shrink-0" />
               <span>اسأل عن السعر عبر واتساب</span>
             </div>
@@ -161,7 +161,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             <div className="flex items-baseline gap-2">
               <span
                 className={`text-sm sm:text-base font-bold font-mono ${
-                  isLight ? 'text-[#C6A667]' : 'text-gold-gradient'
+                  isLight ? 'text-[#8A6A2E]' : 'text-gold-gradient'
                 }`}
               >
                 {formatCurrency(product.price, settings.currency)}

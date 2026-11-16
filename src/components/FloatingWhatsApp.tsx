@@ -19,9 +19,9 @@ export const FloatingWhatsApp: React.FC<FloatingWhatsAppProps> = ({ settings }) 
         target="_blank"
         rel="noopener noreferrer"
         aria-label="تواصل مباشر عبر واتساب"
-        className="group flex items-center gap-3 p-3 sm:px-4 sm:py-3 rounded-full bg-[#25D366] text-white shadow-2xl shadow-[#25D366]/40 hover:scale-105 active:scale-95 transition-all duration-300"
+        className="group flex items-center gap-3 p-3 sm:px-4 sm:py-3 rounded-full bg-[#25D366] hover:bg-[#20bd5a] text-white shadow-lg shadow-[#25D366]/30 hover:scale-105 active:scale-95 transition-all duration-300 border border-white/40"
       >
-        <MessageCircle className="w-6 h-6 animate-pulse" />
+        <MessageCircle className="w-5 h-5" />
         <span className="hidden sm:inline font-bold text-xs tracking-wide">
           تواصل مباشر مع الصائغ
         </span>
