@@ -6,8 +6,7 @@ import firebaseConfig from '../firebase-applet-config.json';
 const app = initializeApp(firebaseConfig);
 
 // CRITICAL: Pass firebaseConfig.firestoreDatabaseId to getFirestore for AI Studio provisioned Enterprise/named DB
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
+export const db = getFirestore(app);export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
