@@ -55,8 +55,7 @@ interface FirebaseContextValue {
 
 const FirebaseContext = createContext<FirebaseContextValue | undefined>(undefined);
 
-const BOOTSTRAPPED_ADMIN_EMAIL = 'sandidodo80@gmail.com';
-
+const BOOTSTRAPPED_ADMIN_EMAIL = 'mando.nawar@gmail.com';
 export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
