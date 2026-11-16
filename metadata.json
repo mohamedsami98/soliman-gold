@@ -1,0 +1,6 @@
+{
+  "name": "SOLIMAN GOLD | سليمان جولد للمجوهرات الفاخرة",
+  "description": "معرض رقمي فاخر للذهب والمجوهرات لعلامة SOLIMAN GOLD - تفاصيل صغيرة… تصنع فخامة لا تُنسى. استعراض الكتالوج بالعاجي الفاخر والطلب المباشر عبر واتساب.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

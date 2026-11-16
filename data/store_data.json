@@ -1,0 +1,354 @@
+{
+  "settings": {
+    "storeName": "SOLIMAN GOLD",
+    "tagline": "تفاصيل صغيرة… تصنع فخامة لا تُنسى",
+    "whatsappNumber": "201020476773",
+    "phoneNumber": "0473405032",
+    "address": "شارع جمال عبدالناصر، قلين المحطة، مركز قلين، كفر الشيخ",
+    "workHours": "يوميًا من 11:30 صباحًا حتى 11:00 مساءً",
+    "currency": "ج.م",
+    "heroBannerTitle": "تفاصيل صغيرة… تصنع فخامة لا تُنسى",
+    "heroBannerSubtitle": "مجموعات استثنائية من الذهب عيار 18 و 21 و 24 المصاغ بأيدي نخبة الصاغة، نجمع بين بريق الذهب الأصفر وسحر التصاميم العصرية لتخليد أروع لحظاتك.",
+    "heroBannerBadge": "مجموعة 2026 الحصرية",
+    "announcementBar": "✨ سليمان جولد SOLIMAN GOLD · تفاصيل صغيرة تصنع فخامة لا تُنسى | اطلب عبر واتساب مباشرة",
+    "goldPrices": {
+      "karat24": 4350,
+      "karat21": 3806,
+      "karat18": 3262,
+      "goldPound": 30448,
+      "lastUpdated": "اليوم، تحديث فوري لبورصة الصاغة"
+    },
+    "priceDisclaimer": "ملاحظة: الأسعار المعروضة استرشادية وقد تتغير طفيفاً وفقاً لحركة سعر الذهب الرسمية ومصنعية القطعة لحظة تأكيد الفاتورة.",
+    "adminPin": "112233",
+    "autoCalcPrices": false,
+    "hideAllPrices": true,
+    "logoUrl": "/assets/aistudio/logo_20a2cea5.jpeg"
+  },
+  "categories": [
+    {
+      "id": "all",
+      "name": "الكل",
+      "icon": "Sparkles"
+    },
+    {
+      "id": "bullion",
+      "name": "سبايك",
+      "icon": "ShieldCheck",
+      "description": "سبائك بي تي سي وسويسري وجنيهات ذهب عيار 24 للاستثمار والادخار"
+    },
+    {
+      "id": "rings",
+      "name": "خواتم",
+      "icon": "Disc",
+      "description": "خواتم ذهب وسوليتير وتصاميم فخمة عيار 18 و 21"
+    },
+    {
+      "id": "wedding-bands",
+      "name": "دبل",
+      "icon": "CircleDot",
+      "description": "دبل ومحابس زفاف وخطوبة كلاسيكية وعصرية متقنة الصياغة"
+    },
+    {
+      "id": "earrings",
+      "name": "حلقان",
+      "icon": "Feather",
+      "description": "حلقان مدلدلة وبريمة بأشكال عصرية ومريحة"
+    },
+    {
+      "id": "bangles",
+      "name": "اساور",
+      "icon": "Circle",
+      "description": "أساور وغوايش عيار 21 صب ومفرغ بأحدث النقشات المصرية والخليجية"
+    },
+    {
+      "id": "twin-rings",
+      "name": "توينزات",
+      "icon": "Layers",
+      "description": "توينزات عرايس وأطقم خواتم مزدوجة فائقة البريق"
+    },
+    {
+      "id": "pendants",
+      "name": "تعاليق",
+      "icon": "Award",
+      "description": "تعاليق ودلايات راقية وماشات بتصاميم إسلامية وتراثية وعصرية"
+    },
+    {
+      "id": "bracelets",
+      "name": "انسيال",
+      "icon": "Maximize2",
+      "description": "انسيالات ذهب كارتييه وتنس وبارزة بتشطيب ناعم"
+    },
+    {
+      "id": "collars",
+      "name": "عقد",
+      "icon": "Crown",
+      "description": "أعقاد شوكر وكوليهات ملكية للمناسبات الخاصة والشبكات"
+    },
+    {
+      "id": "necklaces",
+      "name": "سلاسل",
+      "icon": "Gem",
+      "description": "سلاسل ذهب إيطالي وحبل وسنغافوري بأطوال وأوزان مختلفة"
+    }
+  ],
+  "products": [
+    {
+      "id": "prod-001",
+      "code": "BGL-2101",
+      "name": "طقم غوايش كليوباترا عيار 21 نقش ليزر فاخر",
+      "category": "bangles",
+      "karat": 21,
+      "weight": 42.8,
+      "price": 168500,
+      "hidePrice": true,
+      "inStock": true,
+      "isFeatured": true,
+      "isNew": true,
+      "isOffer": false,
+      "description": "غوايش ذهب عيار 21 صلبة مرصعة بنقش ليزر إيطالي ثلاثي الأبعاد لا يبهت، تصميم كليوباترا الملكي عالي البريق، مريحة في الارتداء ومثالية للادخار والمناسبات الفخمة.",
+      "images": [
+        "https://images.unsplash.com/photo-1611591475870-7613763f9b23?auto=format&fit=crop&w=800&q=80",
+        "https://images.unsplash.com/photo-1599643478518-a784e5dc4c8f?auto=format&fit=crop&w=800&q=80"
+      ],
+      "craftsmanshipFee": 130,
+      "order": 1,
+      "views": 342
+    },
+    {
+      "id": "prod-002",
+      "code": "RNG-1804",
+      "name": "خاتم سوليتير ملكي عيار 18 مرصع بأحجار زيركون سويسري",
+      "category": "rings",
+      "karat": 18,
+      "weight": 5.6,
+      "price": 24500,
+      "hidePrice": true,
+      "inStock": true,
+      "isFeatured": true,
+      "isNew": true,
+      "isOffer": true,
+      "oldPrice": 26800,
+      "description": "خاتم سوليتير فاخر من الذهب الأصفر والأبيض عيار 18، بحجر رئيسي بقطع بريليانت نقي محاط بهالة من الأحجار الدقيقة، تشطيب مرآتي بلمعان لا يقاوم.",
+      "images": [
+        "https://images.unsplash.com/photo-1605100804763-247f67b3557e?auto=format&fit=crop&w=800&q=80",
+        "https://images.unsplash.com/photo-1603561591411-07134e71a2a9?auto=format&fit=crop&w=800&q=80"
+      ],
+      "craftsmanshipFee": 220,
+      "order": 2,
+      "views": 489
+    },
+    {
+      "id": "prod-003",
+      "code": "SET-2109",
+      "name": "طقم شبكة عروس ملكي كامل عيار 21 (كوليه + إسورة + خاتم + حلق)",
+      "category": "collars",
+      "karat": 21,
+      "weight": 78.5,
+      "price": 308500,
+      "hidePrice": true,
+      "inStock": true,
+      "isFeatured": true,
+      "isNew": false,
+      "isOffer": false,
+      "description": "طقم شبكة متكامل التصميم مستوحى من التيجان الملكية، عيار 21 صافي بتطعيمات ليزرية مبهرة، يحتوي على عقد شلالي فخم، إسورة عريضة، خاتم بارز، وزوج حلقان مدلدلة متناسقة.",
+      "images": [
+        "https://images.unsplash.com/photo-1515562141207-7a88fb7ce338?auto=format&fit=crop&w=800&q=80",
+        "https://images.unsplash.com/photo-1535632066927-ab7c9ab60908?auto=format&fit=crop&w=800&q=80"
+      ],
+      "craftsmanshipFee": 125,
+      "order": 3,
+      "views": 610
+    },
+    {
+      "id": "prod-004",
+      "code": "NCK-2105",
+      "name": "سلسلة شوكر إيطالي عيار 21 انسيابية بريق الألماس",
+      "category": "necklaces",
+      "karat": 21,
+      "weight": 16.2,
+      "price": 63500,
+      "hidePrice": true,
+      "inStock": true,
+      "isFeatured": false,
+      "isNew": true,
+      "isOffer": false,
+      "description": "سلسلة ذهبية عريضة عيار 21 بطول مثالي حول العنق، منسوجة بأسلوب الحراشف الإيطالية المرنة التي تعكس النور مع كل حركة كشلال من الذهب الخالص.",
+      "images": [
+        "https://images.unsplash.com/photo-1599643477877-530eb83abc8e?auto=format&fit=crop&w=800&q=80"
+      ],
+      "craftsmanshipFee": 110,
+      "order": 4,
+      "views": 215
+    },
+    {
+      "id": "prod-005",
+      "code": "BAR-2401",
+      "name": "سبيكة ذهب عيار 24 وزن 31.10 جرام (أونصة) مغلفة بغلاف الأمان",
+      "category": "bullion",
+      "karat": 24,
+      "weight": 31.1,
+      "price": 137800,
+      "hidePrice": true,
+      "inStock": true,
+      "isFeatured": true,
+      "isNew": false,
+      "isOffer": false,
+      "description": "أونصة ذهب عيار 24 نقاء 999.9 معتمدة ومختومة رسمياً مع شهادة الفحص وباركود التحقق الدولي، بغلاف مغلق ومؤمن برقم تسلسلي موحد للاستثمار الآمن.",
+      "images": [
+        "https://images.unsplash.com/photo-1610375461246-83df859d849d?auto=format&fit=crop&w=800&q=80"
+      ],
+      "craftsmanshipFee": 65,
+      "order": 5,
+      "views": 820
+    },
+    {
+      "id": "prod-006",
+      "code": "BRC-1802",
+      "name": "إسورة كارتييه لوف ستايل عيار 18 مع مفك أمان فاخر",
+      "category": "bracelets",
+      "karat": 18,
+      "weight": 22.4,
+      "price": 79800,
+      "hidePrice": true,
+      "inStock": true,
+      "isFeatured": true,
+      "isNew": true,
+      "isOffer": false,
+      "description": "إسورة أيقونية ملساء عيار 18 بنقشة البراغي الشهيرة وقفل أمان داخلي محكم، متوفرة بمقاسات مختلفة من الذهب الأصفر والروز جولد، رمز الأناقة العصرية الخالدة.",
+      "images": [
+        "https://images.unsplash.com/photo-1611591475870-7613763f9b23?auto=format&fit=crop&w=800&q=80"
+      ],
+      "craftsmanshipFee": 180,
+      "order": 6,
+      "views": 412
+    },
+    {
+      "id": "prod-007",
+      "code": "EAR-2103",
+      "name": "زوج حلقان هلالي عيار 21 مفرغ بخرزات معلقة ناعمة",
+      "category": "earrings",
+      "karat": 21,
+      "weight": 8.9,
+      "price": 35100,
+      "hidePrice": true,
+      "inStock": true,
+      "isFeatured": false,
+      "isNew": false,
+      "isOffer": true,
+      "oldPrice": 37500,
+      "description": "حلقان عيار 21 بتصميم تراثي هلالي مطور بحلقات متدلية تحدث صوتاً خافتاً وبريقاً لافتاً، قفل مريح ومناسب للاستخدام اليومي والمناسبات.",
+      "images": [
+        "https://images.unsplash.com/photo-1630019852942-f89202989a59?auto=format&fit=crop&w=800&q=80"
+      ],
+      "craftsmanshipFee": 140,
+      "order": 7,
+      "views": 198
+    },
+    {
+      "id": "prod-008",
+      "code": "PND-2102",
+      "name": "دلاية آية الكرسي عيار 21 صياغة يدوية مع إطار مزخرف",
+      "category": "pendants",
+      "karat": 21,
+      "weight": 11.2,
+      "price": 44200,
+      "hidePrice": true,
+      "inStock": true,
+      "isFeatured": true,
+      "isNew": false,
+      "isOffer": false,
+      "description": "دلاية دائرية بارزة محفور عليها آية الكرسي كاملة بخط النسخ العربي البديع، محاطة بإطار مضفور عيار 21 يبرز دقة الحرفة المصرية الأصيلة.",
+      "images": [
+        "https://images.unsplash.com/photo-1599643478518-a784e5dc4c8f?auto=format&fit=crop&w=800&q=80"
+      ],
+      "craftsmanshipFee": 135,
+      "order": 8,
+      "views": 310
+    },
+    {
+      "id": "prod-009",
+      "code": "PND-2402",
+      "name": "جنيه ذهب جورج بريطاني / مصري ميزان عيار 21 وزن 8 جرام",
+      "category": "bullion",
+      "karat": 21,
+      "weight": 8,
+      "price": 31200,
+      "hidePrice": true,
+      "inStock": true,
+      "isFeatured": true,
+      "isNew": false,
+      "isOffer": false,
+      "description": "جنيه ذهب وزن رسمي 8.0 جرام من الذهب عيار 21، مدموغ رسمياً من مصلحة الدمغة والموازين المصرية، الأداة الكلاسيكية الأكثر أماناً للاحتفاظ بالقيمة.",
+      "images": [
+        "https://images.unsplash.com/photo-1610375461246-83df859d849d?auto=format&fit=crop&w=800&q=80"
+      ],
+      "craftsmanshipFee": 50,
+      "order": 9,
+      "views": 740
+    },
+    {
+      "id": "prod-010",
+      "code": "BGL-2104",
+      "name": "غوايش عريضة نقش سنبافي عيار 21 تصميم خليجي فاخر",
+      "category": "bangles",
+      "karat": 21,
+      "weight": 36.5,
+      "price": 143800,
+      "hidePrice": true,
+      "inStock": false,
+      "isFeatured": false,
+      "isNew": false,
+      "isOffer": false,
+      "description": "غويشة فردية عريضة (عرض 2.5 سم) عيار 21 بتفاصيل مخرومة يدويًا ونقشة حبات السنابل التي تعكس الضوء ببراعة فائقة. تصنع خصيصاً بالطلب حسب مقاس المعصم.",
+      "images": [
+        "https://images.unsplash.com/photo-1611591475870-7613763f9b23?auto=format&fit=crop&w=800&q=80"
+      ],
+      "craftsmanshipFee": 130,
+      "order": 10,
+      "views": 180
+    },
+    {
+      "id": "prod-011",
+      "code": "BND-2101",
+      "name": "دبلة زفاف ليزر عيار 21 بتشطيب إيطالي مريح Comfort Fit",
+      "category": "wedding-bands",
+      "karat": 21,
+      "weight": 4.8,
+      "price": 19800,
+      "hidePrice": true,
+      "inStock": true,
+      "isFeatured": true,
+      "isNew": true,
+      "isOffer": false,
+      "description": "دبلة خطوبة وزفاف عيار 21 صب بتصميم إيطالي مصقول بحواف ناعمة مريحة جداً للإصبع، لمعان ذهبي كلاسيكي يدوم للأبد مع إمكانية النقش الداخلي المجاني بالليزر.",
+      "images": [
+        "https://images.unsplash.com/photo-1598560917505-59a3ad559071?auto=format&fit=crop&w=800&q=80"
+      ],
+      "craftsmanshipFee": 140,
+      "order": 11,
+      "views": 295
+    },
+    {
+      "id": "prod-012",
+      "code": "TWN-1801",
+      "name": "توينز ألماس ستايل عيار 18 مرصع بأحجار زيركون فاخرة",
+      "category": "twin-rings",
+      "karat": 18,
+      "weight": 7.2,
+      "price": 31500,
+      "hidePrice": true,
+      "inStock": true,
+      "isFeatured": true,
+      "isNew": true,
+      "isOffer": true,
+      "oldPrice": 34000,
+      "description": "طقم خاتمين توينز عيار 18 متداخلين بتناسق مذهل، أحدهما سوليتير بحجر مركزي براق والآخر محبس مرصع بصفين من الأحجار السويسرية النقية، خيار العروس الأول.",
+      "images": [
+        "https://images.unsplash.com/photo-1603561591411-07134e71a2a9?auto=format&fit=crop&w=800&q=80"
+      ],
+      "craftsmanshipFee": 210,
+      "order": 12,
+      "views": 420
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --gold-champagne: #C6A667;
+    --gold-light: #E2CCA1;
+    --gold-dark: #9E7F43;
+    --charcoal-black: #111111;
+    --surface-dark: #191919;
+    --surface-dark-border: rgba(198, 166, 103, 0.22);
+    --ivory-warm: #FAF8F3;
+    --ivory-card: #FFFFFF;
+    --ivory-border: #EFE9DD;
+    --charcoal-text: #1A1A1A;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    font-family: 'Cairo', system-ui, -apple-system, sans-serif;
+  }
+
+  body {
+    background-color: #111111;
+    color: #FAF8F3;
+    overflow-x: hidden;
+  }
+}
+
+/* Luxury gold text gradient */
+.text-gold-champagne {
+  color: #C6A667;
+}
+
+.text-gold-gradient {
+  background: linear-gradient(135deg, #F5E8CE 0%, #C6A667 50%, #9E7F43 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gold-hover-glow {
+  transition: all 0.3s ease;
+}
+
+.gold-hover-glow:hover {
+  box-shadow: 0 10px 30px -5px rgba(198, 166, 103, 0.25);
+  border-color: #C6A667;
+}
+
+.gold-outline-btn {
+  border: 1.5px solid #C6A667;
+  color: #C6A667;
+  background: transparent;
+  transition: all 0.3s ease;
+}
+
+.gold-outline-btn:hover {
+  background: #C6A667;
+  color: #111111;
+  box-shadow: 0 4px 20px rgba(198, 166, 103, 0.3);
+}
+
+/* Custom fine luxury scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #111111;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2D271D;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #C6A667;
+}
