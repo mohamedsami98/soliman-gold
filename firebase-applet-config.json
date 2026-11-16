@@ -1,12 +1,10 @@
 {
-  "projectId": "flowing-lore-0mn89",
-  "appId": "1:274671911629:web:13695a544b6f6cd45f9f84",
-  "apiKey": "AIzaSyDuJp8rHVksoHSEa6tNrI_nrjXIkbfA9-U",
-  "authDomain": "flowing-lore-0mn89.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-luxuryjewelrygol-e1a5f440-98a7-4dda-9054-a984062c6174",
-  "storageBucket": "flowing-lore-0mn89.firebasestorage.app",
-  "messagingSenderId": "274671911629",
-  "measurementId": "",
-  "oAuthClientId": "274671911629-ncq6atud2ks6v46k53t57adqmrn2op98.apps.googleusercontent.com",
-  "recaptchaSiteKey": ""
+  "apiKey": "AIzaSyAectKIVsdeLY_jT9Nnp_7ToxCAmQf469g",
+  "authDomain": "soliman-gold.firebaseapp.com",
+  "projectId": "soliman-gold",
+  "storageBucket": "soliman-gold.firebasestorage.app",
+  "messagingSenderId": "784479014616",
+  "appId": "1:784479014616:web:9d2ee1e607137cebb511ad",
+  "measurementId": "G-PLNJDMFMB9",
+  "firestoreDatabaseId": "(default)"
 }
