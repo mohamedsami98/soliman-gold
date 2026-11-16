@@ -3,6 +3,9 @@ import {
   User,
   onAuthStateChanged,
   signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendEmailVerification,
   signOut,
 } from 'firebase/auth';
 import {
@@ -42,6 +45,10 @@ interface FirebaseContextValue {
   adminPinFromDb: string;
   loading: boolean;
   signInWithGoogle: () => Promise<User | null>;
+  signInWithEmail: (email: string, password: string) => Promise<User | null>;
+  signUpWithEmail: (email: string, password: string) => Promise<User | null>;
+  resendVerificationEmail: () => Promise<void>;
+  refreshCurrentUser: () => Promise<User | null>;
   logoutFirebase: () => Promise<void>;
   syncLocalDataToFirebase: (force?: boolean) => Promise<{ seededProducts: number }>;
 }
@@ -334,6 +341,60 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return result.user;
   };
 
+  const resolveAdminStatus = async (firebaseUser: User | null) => {
+    if (!firebaseUser) {
+      setIsAdmin(false);
+      return;
+    }
+    const emailMatches =
+      firebaseUser.email?.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL &&
+      firebaseUser.emailVerified;
+    if (emailMatches) {
+      setIsAdmin(true);
+      return;
+    }
+    if (firebaseUser.emailVerified) {
+      try {
+        const adminDoc = await getDoc(doc(db, 'admins', firebaseUser.uid));
+        setIsAdmin(adminDoc.exists());
+      } catch {
+        setIsAdmin(false);
+      }
+    } else {
+      setIsAdmin(false);
+    }
+  };
+
+  const signInWithEmail = async (email: string, password: string): Promise<User | null> => {
+    const result = await signInWithEmailAndPassword(auth, email.trim(), password);
+    await resolveAdminStatus(result.user);
+    return result.user;
+  };
+
+  const signUpWithEmail = async (email: string, password: string): Promise<User | null> => {
+    const result = await createUserWithEmailAndPassword(auth, email.trim(), password);
+    if (result.user && !result.user.emailVerified) {
+      await sendEmailVerification(result.user).catch(() => {});
+    }
+    await resolveAdminStatus(result.user);
+    return result.user;
+  };
+
+  const resendVerificationEmail = async (): Promise<void> => {
+    if (auth.currentUser && !auth.currentUser.emailVerified) {
+      await sendEmailVerification(auth.currentUser);
+    }
+  };
+
+  const refreshCurrentUser = async (): Promise<User | null> => {
+    if (!auth.currentUser) return null;
+    await auth.currentUser.reload();
+    const updatedUser = auth.currentUser;
+    setUser(updatedUser);
+    await resolveAdminStatus(updatedUser);
+    return updatedUser;
+  };
+
   const logoutFirebase = async (): Promise<void> => {
     await signOut(auth);
   };
@@ -352,6 +413,10 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         adminPinFromDb,
         loading,
         signInWithGoogle,
+        signInWithEmail,
+        signUpWithEmail,
+        resendVerificationEmail,
+        refreshCurrentUser,
         logoutFirebase,
         syncLocalDataToFirebase,
       }}

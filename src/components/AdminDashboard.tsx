@@ -36,7 +36,8 @@ import {
   List,
   LogOut,
   Database,
-  ShieldCheck
+  ShieldCheck,
+  Mail
 } from 'lucide-react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -83,17 +84,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     adminPinFromDb,
     mediaRecords,
     signInWithGoogle,
+    signInWithEmail,
+    signUpWithEmail,
+    resendVerificationEmail,
+    refreshCurrentUser,
     logoutFirebase,
     syncLocalDataToFirebase,
   } = useFirebase();
 
   // Authentication State (Hooks must run unconditionally)
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loginMethod, setLoginMethod] = useState<'email' | 'google'>('email');
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [isEmailSignUp, setIsEmailSignUp] = useState(false);
   const [enteredPin, setEnteredPin] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [showLoginPin, setShowLoginPin] = useState(false);
   const [showSettingsPin, setShowSettingsPin] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [authInfoMessage, setAuthInfoMessage] = useState('');
   const [activeTab, setActiveTab] = useState<'products' | 'settings' | 'gold' | 'bulk' | 'media'>('products');
 
   // Product Form State (for adding / editing)
@@ -526,11 +536,79 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Safe early exit AFTER all hooks have executed
   if (!isOpen) return null;
 
+  const verifyAuthorizedAdminUser = async (currentUser: NonNullable<typeof user>): Promise<boolean> => {
+    const isBootstrappedAdmin =
+      currentUser.email?.toLowerCase() === 'sandidodo80@gmail.com' &&
+      currentUser.emailVerified;
+
+    if (isBootstrappedAdmin) return true;
+
+    if (currentUser.emailVerified) {
+      try {
+        const adminSnap = await getDoc(doc(db, 'admins', currentUser.uid));
+        if (adminSnap.exists()) return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
+    setAuthInfoMessage('');
     setIsLoggingIn(true);
     try {
+      if (loginMethod === 'email') {
+        const cleanEmail = loginEmail.trim();
+        if (!cleanEmail) {
+          setAuthError('يرجى إدخال البريد الإلكتروني');
+          return;
+        }
+        if (!loginPassword) {
+          setAuthError('يرجى إدخال كلمة المرور');
+          return;
+        }
+        if (isEmailSignUp && loginPassword.length < 6) {
+          setAuthError('يجب أن تتكون كلمة المرور من 6 أحرف أو أرقام على الأقل');
+          return;
+        }
+
+        const authUser = isEmailSignUp
+          ? await signUpWithEmail(cleanEmail, loginPassword)
+          : await signInWithEmail(cleanEmail, loginPassword);
+
+        if (!authUser) {
+          setAuthError('تعذر تسجيل الدخول بهذا البريد الإلكتروني');
+          return;
+        }
+
+        if (isEmailSignUp) {
+          setAuthInfoMessage(
+            'تم إنشاء الحساب وإرسال رابط التفعيل إلى بريدك الإلكتروني. يرجى فتح بريدك والضغط على رابط التفعيل ثم الضغط على "تحقق من التفعيل".'
+          );
+          return;
+        }
+
+        if (!authUser.emailVerified) {
+          setAuthError(
+            'لم يتم تفعيل البريد الإلكتروني بعد. يرجى الضغط على "إرسال رابط التفعيل" وتأكيده من بريدك حتى تتمكن من حفظ التعديلات في Firebase.'
+          );
+          return;
+        }
+
+        const verifiedAdmin = await verifyAuthorizedAdminUser(authUser);
+        if (!verifiedAdmin) {
+          setAuthError(`الحساب (${authUser.email || ''}) غير مصرح له بإدارة المتجر.`);
+          return;
+        }
+
+        setIsAuthenticated(true);
+        return;
+      }
+
+      // Google + PIN Mode
       let currentUser = user;
       if (!currentUser) {
         currentUser = await signInWithGoogle();
@@ -540,20 +618,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         }
       }
 
-      const isBootstrappedAdmin =
-        currentUser.email?.toLowerCase() === 'sandidodo80@gmail.com' &&
-        currentUser.emailVerified;
-
-      let verifiedAdmin = isAdmin || isBootstrappedAdmin;
-      if (!verifiedAdmin && currentUser.emailVerified) {
-        try {
-          const adminSnap = await getDoc(doc(db, 'admins', currentUser.uid));
-          verifiedAdmin = adminSnap.exists();
-        } catch {
-          verifiedAdmin = false;
-        }
-      }
-
+      const verifiedAdmin = isAdmin || (await verifyAuthorizedAdminUser(currentUser));
       if (!verifiedAdmin) {
         setAuthError(`الحساب (${currentUser.email || ''}) غير مصرح له بإدارة المتجر.`);
         return;
@@ -577,10 +642,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setIsAuthenticated(true);
     } catch (err: any) {
       console.error('Admin login error:', err);
-      if (err?.code === 'auth/popup-closed-by-user') {
-        setAuthError('تم إغلاق نافذة تسجيل الدخول بحساب Google قبل إتمام العملية');
+      const code = err?.code || '';
+      if (code === 'auth/popup-closed-by-user') {
+        setAuthError('تم إغلاق نافذة تسجيل الدخول قبل إتمام العملية');
+      } else if (code === 'auth/popup-blocked') {
+        setAuthError('المتصفح منع فتح نافذة Google المنبثقة. يرجى السماح بالنوافذ المنبثقة أو استخدام الدخول بالبريد الإلكتروني.');
+      } else if (code === 'auth/unauthorized-domain') {
+        setAuthError(
+          `النطاق (${window.location.hostname}) غير مضاف في النطاقات المصرح بها (Authorized Domains) في Firebase Console.`
+        );
+      } else if (code === 'auth/operation-not-allowed') {
+        setAuthError(
+          'تسجيل الدخول بالبريد الإلكتروني غير مفعل حالياً في Firebase Console (Authentication > Sign-in method > Email/Password). فعّله أو استخدم الدخول بحساب Google.'
+        );
+      } else if (
+        code === 'auth/invalid-credential' ||
+        code === 'auth/wrong-password' ||
+        code === 'auth/user-not-found'
+      ) {
+        setAuthError('البريد الإلكتروني أو كلمة المرور غير صحيحة، أو لم يتم إنشاء الحساب بعد.');
+      } else if (code === 'auth/email-already-in-use') {
+        setAuthError('هذا البريد الإلكتروني مسجل بالفعل. قم بتسجيل الدخول بدلاً من إنشاء حساب جديد.');
+      } else if (code === 'auth/invalid-email') {
+        setAuthError('صيغة البريد الإلكتروني غير صحيحة');
+      } else if (code === 'auth/too-many-requests') {
+        setAuthError('محاولات كثيرة خاطئة. يرجى الانتظار قليلاً ثم المحاولة مرة أخرى.');
       } else {
-        setAuthError('تعذر تسجيل الدخول. يرجى السماح بالنوافذ المنبثقة والمحاولة مرة أخرى.');
+        setAuthError(`تعذر تسجيل الدخول (${code || 'خطأ غير معروف'}).`);
       }
     } finally {
       setIsLoggingIn(false);
@@ -838,6 +926,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     await logoutFirebase();
                     setIsAuthenticated(false);
                     setEnteredPin('');
+                    setLoginEmail('');
+                    setLoginPassword('');
                   }}
                   className="px-2.5 py-1.5 rounded-lg bg-[#1E1E1E] hover:bg-rose-950/60 text-stone-300 hover:text-rose-300 border border-stone-700/70 text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
                   title="تسجيل الخروج"
@@ -860,96 +950,296 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Content Area */}
         {!isAuthenticated ? (
           /* Authentication Screen */
-          <div className="p-8 sm:p-10 max-w-md mx-auto text-center space-y-5">
+          <div className="p-6 sm:p-10 max-w-md mx-auto text-center space-y-5 overflow-y-auto">
             <div className="flex justify-center">
               <img
                 src={settings.logoUrl || '/assets/aistudio/logo_20a2cea5.jpeg'}
                 alt="SOLIMAN GOLD"
-                className="h-24 sm:h-28 w-auto object-contain drop-shadow-[0_4px_20px_rgba(198,166,103,0.4)]"
+                className="h-20 sm:h-24 w-auto object-contain drop-shadow-[0_4px_20px_rgba(198,166,103,0.4)]"
               />
             </div>
 
             <div>
               <h4 className="text-lg font-bold text-[#FAF8F3]">تسجيل دخول لوحة التحكم</h4>
               <p className="text-xs text-stone-400 mt-1">
-                التخزين محمي عبر Firebase — سجّل بحساب Google المعتمد ثم أدخل رمز الأمان
+                اختر طريقة الدخول بحساب المالك لإدارة الكتالوج والأسعار على Firebase
               </p>
             </div>
 
-            {/* Google Account Status Card */}
-            <div className="p-3.5 rounded-xl bg-[#16171F] border border-stone-800 text-xs space-y-2.5">
-              {user ? (
-                <div className="flex items-center justify-between gap-2 text-right">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <ShieldCheck className={`w-4 h-4 shrink-0 ${isAdmin ? 'text-emerald-400' : 'text-amber-400'}`} />
-                    <div className="min-w-0">
-                      <p className={`font-semibold truncate ${isAdmin ? 'text-emerald-300' : 'text-amber-300'}`}>
-                        {isAdmin ? 'تم التحقق من حساب المالك' : 'حساب غير مصرح له بالإدارة'}
-                      </p>
-                      <p className="text-[11px] font-mono text-stone-400 truncate">{user.email}</p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => logoutFirebase()}
-                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 text-[11px] shrink-0 cursor-pointer"
-                  >
-                    تبديل
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setAuthError('');
-                    try {
-                      await signInWithGoogle();
-                    } catch {
-                      setAuthError('تعذر فتح نافذة تسجيل الدخول بحساب Google');
-                    }
-                  }}
-                  className="w-full py-2.5 px-4 rounded-lg bg-[#1F222E] hover:bg-[#2A2E3D] border border-[#C6A667]/40 text-[#FAF8F3] font-semibold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                >
-                  <ShieldCheck className="w-4 h-4 text-[#C6A667]" />
-                  <span>تسجيل الدخول بحساب Google المعتمد</span>
-                </button>
-              )}
-            </div>
-
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div className="relative">
-                <input
-                  type={showLoginPin ? 'text' : 'password'}
-                  value={enteredPin}
-                  onChange={(e) => setEnteredPin(e.target.value)}
-                  placeholder="••••••"
-                  className="w-full text-center py-3 px-10 rounded-xl bg-[#181818] border border-stone-700 text-lg font-mono text-white tracking-widest focus:border-[#C6A667] outline-none"
-                  autoFocus
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowLoginPin(!showLoginPin)}
-                  className="absolute left-3.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-white transition-colors cursor-pointer p-1"
-                  title={showLoginPin ? 'إخفاء الرمز' : 'إظهار الرمز'}
-                >
-                  {showLoginPin ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                </button>
-              </div>
-
-              {authError && (
-                <p className="text-xs text-red-400 bg-red-950/40 p-2 rounded border border-red-800">
-                  {authError}
-                </p>
-              )}
+            {/* Login Mode Switcher */}
+            <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-[#181920] border border-stone-800 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginMethod('email');
+                  setAuthError('');
+                  setAuthInfoMessage('');
+                }}
+                className={`py-2 px-3 rounded-lg font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
+                  loginMethod === 'email'
+                    ? 'bg-[#C6A667] text-[#111111]'
+                    : 'text-stone-400 hover:text-white'
+                }`}
+              >
+                <Mail className="w-3.5 h-3.5" />
+                <span>البريد الإلكتروني</span>
+              </button>
 
               <button
-                type="submit"
-                disabled={isLoggingIn}
-                className="w-full py-3 rounded-xl bg-[#C6A667] hover:bg-[#E2CCA1] text-[#111111] font-bold text-sm transition-colors cursor-pointer disabled:opacity-60"
+                type="button"
+                onClick={() => {
+                  setLoginMethod('google');
+                  setAuthError('');
+                  setAuthInfoMessage('');
+                }}
+                className={`py-2 px-3 rounded-lg font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
+                  loginMethod === 'google'
+                    ? 'bg-[#C6A667] text-[#111111]'
+                    : 'text-stone-400 hover:text-white'
+                }`}
               >
-                {isLoggingIn ? 'جارٍ التحقق...' : 'دخول'}
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>حساب Google + PIN</span>
               </button>
-            </form>
+            </div>
+
+            {loginMethod === 'email' ? (
+              <form onSubmit={handleLogin} className="space-y-3.5 text-right" autoComplete="off">
+                {user && isAdmin && (
+                  <div className="p-3 rounded-xl bg-emerald-950/30 border border-emerald-700/40 flex items-center justify-between gap-2">
+                    <div className="text-right min-w-0">
+                      <p className="text-[11px] text-emerald-300 font-bold">جلسة مالك نشطة</p>
+                      <p className="text-[11px] font-mono text-stone-300 truncate">{user.email}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsAuthenticated(true)}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs shrink-0 cursor-pointer"
+                    >
+                      دخول مباشر
+                    </button>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs text-stone-300 font-semibold mb-1.5">
+                    البريد الإلكتروني
+                  </label>
+                  <input
+                    type="email"
+                    name="admin-login-email"
+                    autoComplete="off"
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                    placeholder="أدخل البريد الإلكتروني..."
+                    dir="ltr"
+                    className="w-full py-3 px-3.5 rounded-xl bg-[#181818] border border-stone-700 text-sm text-white placeholder-stone-500 focus:border-[#C6A667] outline-none text-left"
+                    autoFocus
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-stone-300 font-semibold mb-1.5">
+                    كلمة المرور
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showLoginPin ? 'text' : 'password'}
+                      name="admin-login-password"
+                      autoComplete="new-password"
+                      value={loginPassword}
+                      onChange={(e) => setLoginPassword(e.target.value)}
+                      placeholder="••••••••"
+                      dir="ltr"
+                      className="w-full py-3 px-3.5 pl-10 rounded-xl bg-[#181818] border border-stone-700 text-sm font-mono text-white placeholder-stone-500 focus:border-[#C6A667] outline-none text-left"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowLoginPin(!showLoginPin)}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-white transition-colors cursor-pointer p-1"
+                      title={showLoginPin ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                    >
+                      {showLoginPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Email verification banner when signed in but unverified */}
+                {user && !user.emailVerified && (
+                  <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-700/50 text-amber-200 text-xs space-y-2 text-center">
+                    <p>الحساب ({user.email}) مسجل لكنه غير مفعّل بعد.</p>
+                    <div className="flex items-center justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await resendVerificationEmail();
+                            setAuthInfoMessage('تم إرسال رابط التفعيل إلى بريدك الإلكتروني.');
+                          } catch {
+                            setAuthError('تعذر إرسال رابط التفعيل حالياً. حاول بعد دقيقة.');
+                          }
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-amber-500 text-black font-bold text-[11px] cursor-pointer"
+                      >
+                        إرسال رابط التفعيل
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const refreshed = await refreshCurrentUser();
+                          if (refreshed?.emailVerified) {
+                            const ok = await verifyAuthorizedAdminUser(refreshed);
+                            if (ok) {
+                              setIsAuthenticated(true);
+                              return;
+                            }
+                          }
+                          setAuthError('لم يتم تأكيد التفعيل بعد. افتح الرابط المرسل لبريدك ثم أعد المحاولة.');
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-stone-800 text-white text-[11px] cursor-pointer"
+                      >
+                        تحقق من التفعيل
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {authInfoMessage && (
+                  <p className="text-xs text-emerald-300 bg-emerald-950/40 p-2.5 rounded-lg border border-emerald-800 text-center">
+                    {authInfoMessage}
+                  </p>
+                )}
+
+                {authError && (
+                  <p className="text-xs text-red-400 bg-red-950/40 p-2.5 rounded-lg border border-red-800 text-center">
+                    {authError}
+                  </p>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isLoggingIn}
+                  className="w-full py-3 rounded-xl bg-[#C6A667] hover:bg-[#E2CCA1] text-[#111111] font-bold text-sm transition-colors cursor-pointer disabled:opacity-60"
+                >
+                  {isLoggingIn
+                    ? 'جارٍ التحقق...'
+                    : isEmailSignUp
+                      ? 'إنشاء الحساب وإرسال التفعيل'
+                      : 'دخول'}
+                </button>
+
+                <div className="flex items-center justify-between text-[11px] pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsEmailSignUp(!isEmailSignUp);
+                      setAuthError('');
+                      setAuthInfoMessage('');
+                    }}
+                    className="text-[#C6A667] hover:underline cursor-pointer"
+                  >
+                    {isEmailSignUp
+                      ? 'لديك حساب بالفعل؟ العودة لتسجيل الدخول'
+                      : 'حساب جديد بالبريد الإلكتروني؟ إنشاء حساب'}
+                  </button>
+
+                  {user && (
+                    <button
+                      type="button"
+                      onClick={() => logoutFirebase()}
+                      className="text-stone-400 hover:text-white cursor-pointer"
+                    >
+                      تسجيل خروج ({user.email})
+                    </button>
+                  )}
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-4">
+                {/* Google Account Status Card */}
+                <div className="p-3.5 rounded-xl bg-[#16171F] border border-stone-800 text-xs space-y-2.5">
+                  {user ? (
+                    <div className="flex items-center justify-between gap-2 text-right">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <ShieldCheck className={`w-4 h-4 shrink-0 ${isAdmin ? 'text-emerald-400' : 'text-amber-400'}`} />
+                        <div className="min-w-0">
+                          <p className={`font-semibold truncate ${isAdmin ? 'text-emerald-300' : 'text-amber-300'}`}>
+                            {isAdmin ? 'تم التحقق من حساب المالك' : 'حساب غير مصرح له بالإدارة'}
+                          </p>
+                          <p className="text-[11px] font-mono text-stone-400 truncate">{user.email}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => logoutFirebase()}
+                        className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 text-[11px] shrink-0 cursor-pointer"
+                      >
+                        تبديل
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setAuthError('');
+                        try {
+                          await signInWithGoogle();
+                        } catch (err: any) {
+                          const code = err?.code || '';
+                          if (code === 'auth/unauthorized-domain') {
+                            setAuthError(
+                              `النطاق (${window.location.hostname}) غير مضاف في Authorized Domains داخل Firebase Console.`
+                            );
+                          } else if (code === 'auth/popup-blocked') {
+                            setAuthError('المتصفح منع النافذة المنبثقة. اسمح بالنوافذ المنبثقة أو استخدم تبويب البريد الإلكتروني.');
+                          } else {
+                            setAuthError('تعذر فتح نافذة تسجيل الدخول بحساب Google');
+                          }
+                        }
+                      }}
+                      className="w-full py-2.5 px-4 rounded-lg bg-[#1F222E] hover:bg-[#2A2E3D] border border-[#C6A667]/40 text-[#FAF8F3] font-semibold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                    >
+                      <ShieldCheck className="w-4 h-4 text-[#C6A667]" />
+                      <span>تسجيل الدخول بحساب Google المعتمد</span>
+                    </button>
+                  )}
+                </div>
+
+                <form onSubmit={handleLogin} className="space-y-4">
+                  <div className="relative">
+                    <input
+                      type={showLoginPin ? 'text' : 'password'}
+                      value={enteredPin}
+                      onChange={(e) => setEnteredPin(e.target.value)}
+                      placeholder="رمز الأمان (••••••)"
+                      className="w-full text-center py-3 px-10 rounded-xl bg-[#181818] border border-stone-700 text-lg font-mono text-white tracking-widest focus:border-[#C6A667] outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowLoginPin(!showLoginPin)}
+                      className="absolute left-3.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-white transition-colors cursor-pointer p-1"
+                      title={showLoginPin ? 'إخفاء الرمز' : 'إظهار الرمز'}
+                    >
+                      {showLoginPin ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    </button>
+                  </div>
+
+                  {authError && (
+                    <p className="text-xs text-red-400 bg-red-950/40 p-2 rounded border border-red-800">
+                      {authError}
+                    </p>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={isLoggingIn}
+                    className="w-full py-3 rounded-xl bg-[#C6A667] hover:bg-[#E2CCA1] text-[#111111] font-bold text-sm transition-colors cursor-pointer disabled:opacity-60"
+                  >
+                    {isLoggingIn ? 'جارٍ التحقق...' : 'دخول'}
+                  </button>
+                </form>
+              </div>
+            )}
           </div>
         ) : (
           /* Authenticated Dashboard Tabs */
