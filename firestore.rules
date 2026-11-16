@@ -1,0 +1,294 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================
+    // Global Hardened Primitives
+    // =========================================================
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'sandidodo80@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // =========================================================
+    // Entity Validation Blueprints (Anti-Update-Gap)
+    // =========================================================
+    function isValidProduct(data) {
+      return data.keys().hasAll([
+          'id', 'code', 'name', 'category', 'karat', 'weight',
+          'price', 'inStock', 'images', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'code', 'name', 'category', 'karat', 'weight',
+          'price', 'hidePrice', 'inStock', 'isFeatured', 'isNew',
+          'isOffer', 'oldPrice', 'description', 'seoTitle', 'images',
+          'craftsmanshipFee', 'order', 'views', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.code is string && data.code.size() >= 1 && data.code.size() <= 64
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 300
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 64
+        && (data.karat is int || data.karat is float) && data.karat >= 1 && data.karat <= 24
+        && (data.weight is int || data.weight is float) && data.weight >= 0 && data.weight <= 100000
+        && (data.price is int || data.price is float) && data.price >= 0 && data.price <= 100000000
+        && (!('hidePrice' in data) || data.hidePrice is bool)
+        && data.inStock is bool
+        && (!('isFeatured' in data) || data.isFeatured is bool)
+        && (!('isNew' in data) || data.isNew is bool)
+        && (!('isOffer' in data) || data.isOffer is bool)
+        && (!('oldPrice' in data) || data.oldPrice == null || ((data.oldPrice is int || data.oldPrice is float) && data.oldPrice >= 0 && data.oldPrice <= 100000000))
+        && (!('description' in data) || (data.description is string && data.description.size() <= 3000))
+        && (!('seoTitle' in data) || (data.seoTitle is string && data.seoTitle.size() <= 300))
+        && data.images is list && data.images.size() >= 1 && data.images.size() <= 20
+        && data.images[0] is string && data.images[0].size() >= 1 && data.images[0].size() <= 1000
+        && (!('craftsmanshipFee' in data) || ((data.craftsmanshipFee is int || data.craftsmanshipFee is float) && data.craftsmanshipFee >= 0))
+        && (!('order' in data) || (data.order is int || data.order is float))
+        && (!('views' in data) || (data.views is int || data.views is float))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCategory(data) {
+      return data.keys().hasAll(['id', 'name'])
+        && data.keys().hasOnly(['id', 'name', 'icon', 'description', 'order'])
+        && isValidId(data.id)
+        && data.id.size() <= 64
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && (!('icon' in data) || (data.icon is string && data.icon.size() <= 64))
+        && (!('description' in data) || (data.description is string && data.description.size() <= 500))
+        && (!('order' in data) || (data.order is int || data.order is float));
+    }
+
+    function isValidGoldPrices(gp) {
+      return gp is map
+        && gp.keys().hasAll(['karat24', 'karat21', 'karat18', 'goldPound', 'lastUpdated'])
+        && gp.keys().hasOnly(['karat24', 'karat21', 'karat18', 'goldPound', 'lastUpdated'])
+        && (gp.karat24 is int || gp.karat24 is float) && gp.karat24 >= 0
+        && (gp.karat21 is int || gp.karat21 is float) && gp.karat21 >= 0
+        && (gp.karat18 is int || gp.karat18 is float) && gp.karat18 >= 0
+        && (gp.goldPound is int || gp.goldPound is float) && gp.goldPound >= 0
+        && gp.lastUpdated is string && gp.lastUpdated.size() <= 200;
+    }
+
+    function isValidStoreSettings(data) {
+      return data.keys().hasAll(['storeName', 'whatsappNumber', 'currency', 'goldPrices', 'updatedAt'])
+        && data.keys().hasOnly([
+          'storeName', 'tagline', 'whatsappNumber', 'phoneNumber', 'address',
+          'workHours', 'currency', 'heroBannerTitle', 'heroBannerSubtitle',
+          'heroBannerBadge', 'announcementBar', 'goldPrices', 'priceDisclaimer',
+          'autoCalcPrices', 'hideAllPrices', 'logoUrl', 'updatedAt'
+        ])
+        && data.storeName is string && data.storeName.size() >= 1 && data.storeName.size() <= 150
+        && (!('tagline' in data) || (data.tagline is string && data.tagline.size() <= 300))
+        && data.whatsappNumber is string && data.whatsappNumber.size() >= 1 && data.whatsappNumber.size() <= 30
+        && (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 30))
+        && (!('address' in data) || (data.address is string && data.address.size() <= 400))
+        && (!('workHours' in data) || (data.workHours is string && data.workHours.size() <= 200))
+        && data.currency is string && data.currency.size() >= 1 && data.currency.size() <= 20
+        && (!('heroBannerTitle' in data) || (data.heroBannerTitle is string && data.heroBannerTitle.size() <= 300))
+        && (!('heroBannerSubtitle' in data) || (data.heroBannerSubtitle is string && data.heroBannerSubtitle.size() <= 1000))
+        && (!('heroBannerBadge' in data) || (data.heroBannerBadge is string && data.heroBannerBadge.size() <= 100))
+        && (!('announcementBar' in data) || (data.announcementBar is string && data.announcementBar.size() <= 500))
+        && isValidGoldPrices(data.goldPrices)
+        && (!('priceDisclaimer' in data) || (data.priceDisclaimer is string && data.priceDisclaimer.size() <= 1000))
+        && (!('autoCalcPrices' in data) || data.autoCalcPrices is bool)
+        && (!('hideAllPrices' in data) || data.hideAllPrices is bool)
+        && (!('logoUrl' in data) || (data.logoUrl is string && data.logoUrl.size() <= 500))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminSecurityConfig(data) {
+      return data.keys().hasAll(['adminPin', 'updatedAt'])
+        && data.keys().hasOnly(['adminPin', 'updatedAt'])
+        && data.adminPin is string && data.adminPin.size() >= 4 && data.adminPin.size() <= 32
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMediaItem(data) {
+      return data.keys().hasAll(['id', 'filename', 'url', 'size', 'uploadedBy', 'createdAt'])
+        && data.keys().hasOnly(['id', 'filename', 'url', 'size', 'productCode', 'uploadedBy', 'createdAt'])
+        && isValidId(data.id)
+        && data.filename is string && data.filename.size() >= 1 && data.filename.size() <= 255
+        && data.url is string && data.url.size() >= 1 && data.url.size() <= 1000
+        && (data.size is int || data.size is float) && data.size >= 0
+        && (!('productCode' in data) || (data.productCode is string && data.productCode.size() <= 64))
+        && data.uploadedBy is string && data.uploadedBy == request.auth.uid
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAdminUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'email', 'role', 'createdAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.role in ['admin', 'owner']
+        && data.createdAt is timestamp;
+    }
+
+    // =========================================================
+    // Collection Rules
+    // =========================================================
+
+    // 1. Products Catalog (Public storefront catalog; Admin write)
+    match /products/{productId} {
+      allow get: if isValidId(productId);
+      allow list: if true;
+
+      allow create: if isAdmin()
+        && isValidId(productId)
+        && isValidProduct(incoming())
+        && incoming().id == productId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(productId)
+        && isValidProduct(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'code', 'name', 'category', 'karat', 'weight', 'price',
+          'hidePrice', 'inStock', 'isFeatured', 'isNew', 'isOffer',
+          'oldPrice', 'description', 'seoTitle', 'images',
+          'craftsmanshipFee', 'order', 'views', 'updatedAt'
+        ]);
+
+      allow delete: if isAdmin() && isValidId(productId);
+    }
+
+    // 2. Categories (Public storefront departments; Admin write)
+    match /categories/{categoryId} {
+      allow get: if isValidId(categoryId);
+      allow list: if true;
+
+      allow create: if isAdmin()
+        && isValidId(categoryId)
+        && isValidCategory(incoming())
+        && incoming().id == categoryId;
+
+      allow update: if isAdmin()
+        && isValidId(categoryId)
+        && isValidCategory(incoming())
+        && incoming().id == existing().id
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'name', 'icon', 'description', 'order'
+        ]);
+
+      allow delete: if isAdmin() && isValidId(categoryId);
+    }
+
+    // 3. Public Store Settings (doc id: 'store')
+    match /settings/{settingId} {
+      allow get: if settingId == 'store';
+      allow list: if false;
+
+      allow create: if isAdmin()
+        && settingId == 'store'
+        && isValidStoreSettings(incoming())
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && settingId == 'store'
+        && isValidStoreSettings(incoming())
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'storeName', 'tagline', 'whatsappNumber', 'phoneNumber', 'address',
+          'workHours', 'currency', 'heroBannerTitle', 'heroBannerSubtitle',
+          'heroBannerBadge', 'announcementBar', 'goldPrices', 'priceDisclaimer',
+          'autoCalcPrices', 'hideAllPrices', 'logoUrl', 'updatedAt'
+        ]);
+
+      allow delete: if false;
+    }
+
+    // 4. Private Admin Security Config (PIN lock, restricted strictly to admins)
+    match /adminConfig/{configId} {
+      allow get: if isAdmin() && configId == 'security';
+      allow list: if false;
+
+      allow create: if isAdmin()
+        && configId == 'security'
+        && isValidAdminSecurityConfig(incoming())
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && configId == 'security'
+        && isValidAdminSecurityConfig(incoming())
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['adminPin', 'updatedAt']);
+
+      allow delete: if false;
+    }
+
+    // 5. Media Library Metadata (Admin only)
+    match /media/{mediaId} {
+      allow get: if isAdmin() && isValidId(mediaId);
+      allow list: if isAdmin();
+
+      allow create: if isAdmin()
+        && isValidId(mediaId)
+        && isValidMediaItem(incoming())
+        && incoming().id == mediaId
+        && incoming().createdAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(mediaId)
+        && isValidMediaItem(incoming())
+        && incoming().id == existing().id
+        && incoming().uploadedBy == existing().uploadedBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['productCode']);
+
+      allow delete: if isAdmin() && isValidId(mediaId);
+    }
+
+    // 6. Admins Roster (Admin only)
+    match /admins/{uid} {
+      allow get: if isAdmin() && isValidId(uid);
+      allow list: if isAdmin();
+
+      allow create: if isAdmin()
+        && isValidId(uid)
+        && isValidAdminUser(incoming())
+        && incoming().uid == uid
+        && incoming().createdAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(uid)
+        && isValidAdminUser(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'role']);
+
+      allow delete: if isAdmin() && isValidId(uid) && uid != request.auth.uid;
+    }
+  }
+}

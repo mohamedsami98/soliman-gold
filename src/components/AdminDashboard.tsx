@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   X,
   Lock,
@@ -33,8 +33,24 @@ import {
   HardDrive,
   Camera,
   Grid,
-  List
+  List,
+  LogOut,
+  Database,
+  ShieldCheck
 } from 'lucide-react';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../firebase';
+import { useFirebase } from '../context/FirebaseContext';
+import {
+  createProductInFirestore,
+  updateProductInFirestore,
+  deleteProductInFirestore,
+  clearAllProductsInFirestore,
+  bulkUpsertProductsInFirestore,
+  saveStoreSettingsInFirestore,
+  saveAdminPinInFirestore,
+  saveMediaItemInFirestore,
+} from '../services/firestoreStore';
 import { Product, StoreSettings, Category } from '../types/jewelry';
 import { formatCurrency } from '../utils/whatsapp';
 import {
@@ -49,7 +65,7 @@ interface AdminDashboardProps {
   categories: Category[];
   products: Product[];
   onClose: () => void;
-  onRefreshData: () => void;
+  onRefreshData?: () => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -60,9 +76,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onClose,
   onRefreshData,
 }) => {
+  const {
+    user,
+    isAdmin,
+    firestoreSynced,
+    adminPinFromDb,
+    mediaRecords,
+    signInWithGoogle,
+    logoutFirebase,
+    syncLocalDataToFirebase,
+  } = useFirebase();
+
   // Authentication State (Hooks must run unconditionally)
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [enteredPin, setEnteredPin] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [showLoginPin, setShowLoginPin] = useState(false);
   const [showSettingsPin, setShowSettingsPin] = useState(false);
   const [authError, setAuthError] = useState('');
@@ -125,6 +153,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [mediaSearch, setMediaSearch] = useState('');
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
 
+  const combinedMediaFiles = useMemo(() => {
+    const byUrl = new Map<string, MediaFileItem>();
+    for (const rec of mediaRecords) {
+      if (rec.url && !byUrl.has(rec.url)) {
+        byUrl.set(rec.url, {
+          filename: rec.filename || rec.url.split('/').pop() || 'image.jpg',
+          url: rec.url,
+          size: Number(rec.size || 0),
+          createdAt: typeof rec.createdAt === 'string' ? rec.createdAt : '',
+        });
+      }
+    }
+    for (const f of mediaFiles) {
+      if (f.url && !byUrl.has(f.url)) {
+        byUrl.set(f.url, f);
+      }
+    }
+    return Array.from(byUrl.values());
+  }, [mediaRecords, mediaFiles]);
+
   // Form image upload state
   const [isUploadingFormImages, setIsUploadingFormImages] = useState(false);
   const [showManualUrlInput, setShowManualUrlInput] = useState(false);
@@ -181,7 +229,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const uploadFormImages = async (fileList: File[]) => {
     setIsUploadingFormImages(true);
-    setStatusMessage('جارٍ رفع الصور من جهازك إلى المتجر...');
+    setStatusMessage('جارٍ رفع الصور من جهازك وتسجيلها في المتجر...');
+    const uploadPin = enteredPin || adminPinFromDb || '112233';
     try {
       const newUrls: string[] = [];
       for (const file of fileList) {
@@ -191,7 +240,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            pin: enteredPin,
+            pin: uploadPin,
             image: dataUrl,
             filename: file.name,
             productCode: formCode,
@@ -200,6 +249,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const data = await res.json();
         if (data.success && data.url) {
           newUrls.push(data.url);
+          await saveMediaItemInFirestore({
+            filename: data.filename || file.name,
+            url: data.url,
+            size: file.size,
+            productCode: formCode || undefined,
+          }).catch(() => null);
         }
       }
       if (newUrls.length > 0) {
@@ -207,6 +262,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setFormImagesText(updated.join('\n'));
         setStatusMessage(`تم رفع ${newUrls.length} صورة من جهاز الكمبيوتر بنجاح!`);
         setTimeout(() => setStatusMessage(''), 3500);
+      } else {
+        setStatusMessage('لم يتم رفع أي صورة. تأكد من صلاحية الملفات.');
       }
     } catch (err) {
       setStatusMessage('حدث خطأ أثناء رفع الصور');
@@ -262,7 +319,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleExecuteBatchUpload = async () => {
     if (batchFiles.length === 0) return;
     setIsUploadingBatch(true);
-    setBatchUploadResult('جارٍ قراءة ورفع الصور من جهازك إلى المتجر...');
+    setBatchUploadResult('جارٍ قراءة ورفع الصور من جهازك وحفظ روابطها في Firebase...');
+    const uploadPin = enteredPin || adminPinFromDb || '112233';
 
     try {
       const itemsPayload = [];
@@ -271,6 +329,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         itemsPayload.push({
           image: dataUrl,
           filename: item.name,
+          size: item.size,
           productCode: item.matchedProductCode || undefined,
         });
       }
@@ -279,17 +338,51 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          pin: enteredPin,
+          pin: uploadPin,
           items: itemsPayload,
         }),
       });
 
       const data = await res.json();
-      if (data.success) {
-        setBatchUploadResult(`تم رفع ${data.count} صورة بنجاح وحفظها في المتجر!`);
+      if (data.success && Array.isArray(data.items)) {
+        const productUpdates = new Map<string, string[]>();
+
+        for (let idx = 0; idx < data.items.length; idx++) {
+          const uploaded = data.items[idx] as { url: string; filename: string; productCode?: string };
+          const original = batchFiles[idx];
+          await saveMediaItemInFirestore({
+            filename: uploaded.filename || original?.name || 'image.jpg',
+            url: uploaded.url,
+            size: original?.size || 0,
+            productCode: uploaded.productCode || original?.matchedProductCode || undefined,
+          }).catch(() => null);
+
+          const codeToMatch = (uploaded.productCode || original?.matchedProductCode || '').trim().toUpperCase();
+          if (codeToMatch) {
+            const list = productUpdates.get(codeToMatch) || [];
+            list.push(uploaded.url);
+            productUpdates.set(codeToMatch, list);
+          }
+        }
+
+        for (const [code, newUrls] of productUpdates.entries()) {
+          const targetProduct = products.find((p) => p.code && p.code.trim().toUpperCase() === code);
+          if (targetProduct) {
+            const mergedImages = [
+              ...newUrls,
+              ...(targetProduct.images || []).filter((img) => !newUrls.includes(img)),
+            ];
+            await updateProductInFirestore(targetProduct.id, {
+              ...targetProduct,
+              images: mergedImages,
+            });
+          }
+        }
+
+        setBatchUploadResult(`تم رفع ${data.count} صورة بنجاح وحفظها في Firebase!`);
         setBatchFiles([]);
         fetchMediaFiles();
-        onRefreshData();
+        onRefreshData?.();
       } else {
         setBatchUploadResult(`خطأ: ${data.message}`);
       }
@@ -306,27 +399,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (!targetProduct) return;
 
     try {
-      setStatusMessage(`جارٍ تعيين الصورة للقطعة (${targetProduct.name})...`);
+      setStatusMessage(`جارٍ تعيين الصورة للقطعة (${targetProduct.name}) في Firebase...`);
       const updatedImages = [imageUrl, ...(targetProduct.images || []).filter((img) => img !== imageUrl)];
-      const res = await fetch(`/api/products/${targetProduct.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pin: enteredPin,
-          product: {
-            ...targetProduct,
-            images: updatedImages,
-          },
-        }),
+      await updateProductInFirestore(targetProduct.id, {
+        ...targetProduct,
+        images: updatedImages,
       });
-      const data = await res.json();
-      if (data.success) {
-        setStatusMessage(`تم تعيين الصورة كغلاف للقطعة (${targetProduct.name}) بنجاح!`);
-        onRefreshData();
-        setTimeout(() => setStatusMessage(''), 3000);
-      } else {
-        setStatusMessage(`خطأ: ${data.message}`);
-      }
+      setStatusMessage(`تم تعيين الصورة كغلاف للقطعة (${targetProduct.name}) بنجاح!`);
+      onRefreshData?.();
+      setTimeout(() => setStatusMessage(''), 3000);
     } catch (err) {
       setStatusMessage('حدث خطأ أثناء ربط الصورة بالمنتج');
     }
@@ -335,7 +416,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleDirectProductImageUpload = async (product: Product, file: File) => {
     if (!file || !file.type.startsWith('image/')) return;
     setUploadingProductId(product.id);
-    setStatusMessage(`جارٍ رفع صورة (${product.name}) من جهاز الكمبيوتر...`);
+    setStatusMessage(`جارٍ رفع صورة (${product.name}) من جهاز الكمبيوتر وحفظها في Firebase...`);
+    const uploadPin = enteredPin || adminPinFromDb || '112233';
 
     try {
       const dataUrl = await readFileAsDataUrl(file);
@@ -343,7 +425,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          pin: enteredPin,
+          pin: uploadPin,
           image: dataUrl,
           filename: `${product.code}_${file.name}`,
           productCode: product.code,
@@ -352,25 +434,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const data = await res.json();
       if (data.success && data.url) {
         const updatedImages = [data.url, ...(product.images || []).filter((img) => img !== data.url)];
-        const updateRes = await fetch(`/api/products/${product.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            pin: enteredPin,
-            product: {
-              ...product,
-              images: updatedImages,
-            },
-          }),
+        await updateProductInFirestore(product.id, {
+          ...product,
+          images: updatedImages,
         });
-        const updateData = await updateRes.json();
-        if (updateData.success) {
-          setStatusMessage(`تم بنجاح رفع وتعيين صورة جديدة لـ "${product.name}"!`);
-          onRefreshData();
-          setTimeout(() => setStatusMessage(''), 3500);
-        } else {
-          setStatusMessage(`خطأ: ${updateData.message || 'فشل تحديث المنتج'}`);
-        }
+        await saveMediaItemInFirestore({
+          filename: data.filename || `${product.code}_${file.name}`,
+          url: data.url,
+          size: file.size,
+          productCode: product.code,
+        }).catch(() => null);
+
+        setStatusMessage(`تم بنجاح رفع وتعيين صورة جديدة لـ "${product.name}" في Firebase!`);
+        onRefreshData?.();
+        setTimeout(() => setStatusMessage(''), 3500);
       } else {
         setStatusMessage(`خطأ: ${data.message || 'فشل رفع الصورة'}`);
       }
@@ -383,23 +460,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleClearAllProducts = async () => {
     setIsClearingAllProducts(true);
-    setStatusMessage('جارٍ مسح كافة المنتجات...');
+    setStatusMessage('جارٍ مسح كافة المنتجات من Firebase Firestore...');
     try {
-      const res = await fetch('/api/products/clear-all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: enteredPin }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setStatusMessage(data.message || 'تم مسح كافة المنتجات بنجاح');
-        setShowClearAllConfirmModal(false);
-        onRefreshData();
-      } else {
-        setStatusMessage(`خطأ: ${data.message}`);
-      }
+      const deletedCount = await clearAllProductsInFirestore();
+      setStatusMessage(`تم مسح كافة المنتجات بنجاح (${deletedCount} منتج) من قاعدة البيانات.`);
+      setShowClearAllConfirmModal(false);
+      onRefreshData?.();
     } catch (err) {
-      setStatusMessage('حدث خطأ أثناء مسح المنتجات');
+      setStatusMessage('حدث خطأ أثناء مسح المنتجات من Firebase');
     } finally {
       setIsClearingAllProducts(false);
       setTimeout(() => setStatusMessage(''), 4000);
@@ -408,18 +476,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleRestoreDefaultProducts = async () => {
     if (!confirm('هل تريد استعادة المنتجات التجريبية الافتراضية للمتجر؟')) return;
-    setStatusMessage('جارٍ استعادة البيانات الافتراضية...');
+    setStatusMessage('جارٍ استعادة البيانات الافتراضية إلى Firebase...');
     try {
-      const res = await fetch('/api/admin/reset-defaults', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: enteredPin }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setStatusMessage('تمت استعادة المنتجات الافتراضية بنجاح!');
-        onRefreshData();
-      }
+      const { seededProducts } = await syncLocalDataToFirebase(true);
+      setStatusMessage(`تمت استعادة ${seededProducts} منتج افتراضي إلى Firebase بنجاح!`);
+      onRefreshData?.();
     } catch (err) {
       setStatusMessage('حدث خطأ أثناء الاستعادة');
     } finally {
@@ -428,8 +489,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   useEffect(() => {
-    setTempSettings(settings);
-  }, [settings]);
+    setTempSettings({
+      ...settings,
+      adminPin: adminPinFromDb || settings.adminPin || '112233',
+    });
+  }, [settings, adminPinFromDb]);
 
   // Handle Karat 21 Gold formula change
   const handleKarat21Change = (new21: number) => {
@@ -465,20 +529,61 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
+    setIsLoggingIn(true);
     try {
-      const res = await fetch('/api/admin/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: enteredPin }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setIsAuthenticated(true);
-      } else {
-        setAuthError(data.message || 'رمز الدخول غير صحيح');
+      let currentUser = user;
+      if (!currentUser) {
+        currentUser = await signInWithGoogle();
+        if (!currentUser) {
+          setAuthError('يجب تسجيل الدخول بحساب Google المعتمد للمتابعة');
+          return;
+        }
       }
-    } catch (err) {
-      setAuthError('حدث خطأ في الاتصال بالخادم');
+
+      const isBootstrappedAdmin =
+        currentUser.email?.toLowerCase() === 'sandidodo80@gmail.com' &&
+        currentUser.emailVerified;
+
+      let verifiedAdmin = isAdmin || isBootstrappedAdmin;
+      if (!verifiedAdmin && currentUser.emailVerified) {
+        try {
+          const adminSnap = await getDoc(doc(db, 'admins', currentUser.uid));
+          verifiedAdmin = adminSnap.exists();
+        } catch {
+          verifiedAdmin = false;
+        }
+      }
+
+      if (!verifiedAdmin) {
+        setAuthError(`الحساب (${currentUser.email || ''}) غير مصرح له بإدارة المتجر.`);
+        return;
+      }
+
+      let expectedPin = adminPinFromDb || '112233';
+      try {
+        const secSnap = await getDoc(doc(db, 'adminConfig', 'security'));
+        if (secSnap.exists() && secSnap.data()?.adminPin) {
+          expectedPin = String(secSnap.data().adminPin);
+        }
+      } catch {
+        // Use fallback expectedPin
+      }
+
+      if (enteredPin.trim() !== expectedPin) {
+        setAuthError('رمز الدخول غير صحيح');
+        return;
+      }
+
+      setIsAuthenticated(true);
+    } catch (err: any) {
+      console.error('Admin login error:', err);
+      if (err?.code === 'auth/popup-closed-by-user') {
+        setAuthError('تم إغلاق نافذة تسجيل الدخول بحساب Google قبل إتمام العملية');
+      } else {
+        setAuthError('تعذر تسجيل الدخول. يرجى السماح بالنوافذ المنبثقة والمحاولة مرة أخرى.');
+      }
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -523,7 +628,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    setStatusMessage('جارٍ الحفظ...');
+    setStatusMessage('جارٍ الحفظ في Firebase Firestore...');
 
     const imagesList = formImagesText
       .split('\n')
@@ -549,36 +654,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     try {
       if (isAddingNew) {
-        const res = await fetch('/api/products', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pin: enteredPin, product: productPayload }),
+        await createProductInFirestore({
+          ...productPayload,
+          isNew: true,
+          order: products.length + 1,
         });
-        const data = await res.json();
-        if (data.success) {
-          setStatusMessage('تمت إضافة المنتج بنجاح');
-          setIsAddingNew(false);
-          onRefreshData();
-        } else {
-          setStatusMessage(`خطأ: ${data.message}`);
-        }
+        setStatusMessage('تمت إضافة المنتج وحفظه في Firebase بنجاح');
+        setIsAddingNew(false);
+        onRefreshData?.();
       } else if (editingProduct) {
-        const res = await fetch(`/api/products/${editingProduct.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pin: enteredPin, product: productPayload }),
+        await updateProductInFirestore(editingProduct.id, {
+          ...editingProduct,
+          ...productPayload,
         });
-        const data = await res.json();
-        if (data.success) {
-          setStatusMessage('تم تحديث المنتج بنجاح');
-          setEditingProduct(null);
-          onRefreshData();
-        } else {
-          setStatusMessage(`خطأ: ${data.message}`);
-        }
+        setStatusMessage('تم تحديث المنتج في Firebase بنجاح');
+        setEditingProduct(null);
+        onRefreshData?.();
       }
     } catch (err) {
-      setStatusMessage('حدث خطأ أثناء حفظ المنتج');
+      setStatusMessage('حدث خطأ أثناء حفظ المنتج في Firebase');
     }
 
     setTimeout(() => setStatusMessage(''), 3000);
@@ -588,40 +682,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (!confirm(`هل أنت متأكد من حذف المنتج: "${name}"؟`)) return;
 
     try {
-      const res = await fetch(`/api/products/${id}?pin=${enteredPin}`, {
-        method: 'DELETE',
-      });
-      const data = await res.json();
-      if (data.success) {
-        onRefreshData();
-      } else {
-        alert(data.message || 'فشل الحذف');
-      }
+      await deleteProductInFirestore(id);
+      setStatusMessage(`تم حذف المنتج "${name}" من Firebase`);
+      onRefreshData?.();
+      setTimeout(() => setStatusMessage(''), 3000);
     } catch (err) {
-      alert('خطأ أثناء الحذف');
+      alert('حدث خطأ أثناء حذف المنتج من Firebase');
     }
   };
 
   const handleSaveSettings = async () => {
-    setStatusMessage('جارٍ حفظ الإعدادات...');
+    setStatusMessage('جارٍ حفظ الإعدادات في Firebase...');
+    const previousPin = adminPinFromDb || enteredPin || '112233';
     try {
-      const res = await fetch('/api/settings', {
+      await saveStoreSettingsInFirestore(tempSettings);
+
+      const cleanPin = (tempSettings.adminPin || '').trim();
+      if (cleanPin && cleanPin !== adminPinFromDb) {
+        await saveAdminPinInFirestore(cleanPin);
+        setEnteredPin(cleanPin);
+      }
+
+      // Best-effort sync to local server settings so PC upload route PIN stays aligned
+      fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: enteredPin, settings: tempSettings }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setStatusMessage('تم حفظ الإعدادات وتحديث الموقع فورياً');
-        if (tempSettings.adminPin) {
-          setEnteredPin(tempSettings.adminPin);
-        }
-        onRefreshData();
-      } else {
-        setStatusMessage(`خطأ: ${data.message}`);
-      }
-    } catch (err) {
-      setStatusMessage('فشل حفظ الإعدادات');
+        body: JSON.stringify({ pin: previousPin, settings: tempSettings }),
+      }).catch(() => {});
+
+      setStatusMessage('تم حفظ الإعدادات وتحديث الموقع فورياً في Firebase');
+      onRefreshData?.();
+    } catch (err: any) {
+      setStatusMessage(err?.message || 'فشل حفظ الإعدادات في Firebase');
     }
     setTimeout(() => setStatusMessage(''), 3000);
   };
@@ -683,40 +775,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setBulkImportStatus('');
   };
 
-  // Submit parsed Excel items to backend
+  // Submit parsed Excel items to Firebase Firestore
   const handleExecuteExcelImport = async () => {
     if (parsedExcelItems.length === 0) return;
 
     setIsSubmittingExcel(true);
-    setBulkImportStatus('جارٍ حفظ الأصناف وتحديث الكتالوج في المتجر...');
+    setBulkImportStatus('جارٍ حفظ الأصناف وتحديث الكتالوج في Firebase Firestore...');
 
     try {
-      const res = await fetch('/api/products/bulk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pin: enteredPin,
-          items: parsedExcelItems,
-          updateExisting: updateExistingByCode,
-        }),
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        setBulkImportStatus(
-          `✓ ${data.message || `تم بنجاح حفظ ${data.count} صنف في الكتالوج!`}`
-        );
-        onRefreshData();
-        // Clear items after brief pause so user sees confirmation
-        setTimeout(() => {
-          setParsedExcelItems([]);
-          setExcelFileName('');
-        }, 2500);
-      } else {
-        setBulkImportStatus(`فشل: ${data.message || 'تعذر استيراد البيانات'}`);
-      }
+      const result = await bulkUpsertProductsInFirestore(
+        parsedExcelItems,
+        products,
+        settings,
+        updateExistingByCode
+      );
+      setBulkImportStatus(
+        `✓ تمت المعالجة بنجاح في Firebase: إضافة ${result.addedCount} منتج جديد، وتحديث ${result.updatedCount} منتج حالي.`
+      );
+      onRefreshData?.();
+      setTimeout(() => {
+        setParsedExcelItems([]);
+        setExcelFileName('');
+      }, 2500);
     } catch (err) {
-      setBulkImportStatus('حدث خطأ أثناء إرسال البيانات إلى الخادم.');
+      setBulkImportStatus('حدث خطأ أثناء حفظ البيانات إلى Firebase Firestore.');
     } finally {
       setIsSubmittingExcel(false);
     }
@@ -727,7 +809,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       <div className="relative w-full max-w-5xl rounded-2xl bg-[#111111] border border-[#C6A667]/35 shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col">
         
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-stone-800 bg-[#161616] shrink-0">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-stone-800 bg-[#161616] shrink-0 gap-3">
           <div className="flex items-center gap-3">
             <img
               src={settings.logoUrl || '/assets/aistudio/logo_20a2cea5.jpeg'}
@@ -740,18 +822,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg bg-[#1E1E1E] text-stone-300 hover:text-white transition-colors cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {isAuthenticated && user && (
+              <>
+                <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#1C1F26] border border-[#C6A667]/30 text-[11px] text-stone-300">
+                  <Database className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>{firestoreSynced ? 'Firebase Firestore متصل' : 'مزامنة سحابية'}</span>
+                  <span className="text-stone-500">·</span>
+                  <span className="font-mono text-[#E2CCA1]">{user.email}</span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await logoutFirebase();
+                    setIsAuthenticated(false);
+                    setEnteredPin('');
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg bg-[#1E1E1E] hover:bg-rose-950/60 text-stone-300 hover:text-rose-300 border border-stone-700/70 text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
+                  title="تسجيل الخروج"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">خروج</span>
+                </button>
+              </>
+            )}
+
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg bg-[#1E1E1E] text-stone-300 hover:text-white transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Content Area */}
         {!isAuthenticated ? (
           /* Authentication Screen */
-          <div className="p-8 sm:p-10 max-w-md mx-auto text-center space-y-6">
+          <div className="p-8 sm:p-10 max-w-md mx-auto text-center space-y-5">
             <div className="flex justify-center">
               <img
                 src={settings.logoUrl || '/assets/aistudio/logo_20a2cea5.jpeg'}
@@ -763,8 +872,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div>
               <h4 className="text-lg font-bold text-[#FAF8F3]">تسجيل دخول لوحة التحكم</h4>
               <p className="text-xs text-stone-400 mt-1">
-                يرجى إدخال رمز الأمان السري للتحكم في الكتالوج والأسعار والإعدادات
+                التخزين محمي عبر Firebase — سجّل بحساب Google المعتمد ثم أدخل رمز الأمان
               </p>
+            </div>
+
+            {/* Google Account Status Card */}
+            <div className="p-3.5 rounded-xl bg-[#16171F] border border-stone-800 text-xs space-y-2.5">
+              {user ? (
+                <div className="flex items-center justify-between gap-2 text-right">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <ShieldCheck className={`w-4 h-4 shrink-0 ${isAdmin ? 'text-emerald-400' : 'text-amber-400'}`} />
+                    <div className="min-w-0">
+                      <p className={`font-semibold truncate ${isAdmin ? 'text-emerald-300' : 'text-amber-300'}`}>
+                        {isAdmin ? 'تم التحقق من حساب المالك' : 'حساب غير مصرح له بالإدارة'}
+                      </p>
+                      <p className="text-[11px] font-mono text-stone-400 truncate">{user.email}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => logoutFirebase()}
+                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 text-[11px] shrink-0 cursor-pointer"
+                  >
+                    تبديل
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setAuthError('');
+                    try {
+                      await signInWithGoogle();
+                    } catch {
+                      setAuthError('تعذر فتح نافذة تسجيل الدخول بحساب Google');
+                    }
+                  }}
+                  className="w-full py-2.5 px-4 rounded-lg bg-[#1F222E] hover:bg-[#2A2E3D] border border-[#C6A667]/40 text-[#FAF8F3] font-semibold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  <ShieldCheck className="w-4 h-4 text-[#C6A667]" />
+                  <span>تسجيل الدخول بحساب Google المعتمد</span>
+                </button>
+              )}
             </div>
 
             <form onSubmit={handleLogin} className="space-y-4">
@@ -795,9 +944,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               <button
                 type="submit"
-                className="w-full py-3 rounded-xl bg-[#C6A667] hover:bg-[#E2CCA1] text-[#111111] font-bold text-sm transition-colors cursor-pointer"
+                disabled={isLoggingIn}
+                className="w-full py-3 rounded-xl bg-[#C6A667] hover:bg-[#E2CCA1] text-[#111111] font-bold text-sm transition-colors cursor-pointer disabled:opacity-60"
               >
-                دخول
+                {isLoggingIn ? 'جارٍ التحقق...' : 'دخول'}
               </button>
             </form>
           </div>
@@ -2721,7 +2871,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div>
                       <h4 className="text-sm font-bold text-[#FAF6ED] flex items-center gap-2">
                         <HardDrive className="w-4 h-4 text-[#D4AF37]" />
-                        <span>معرض الصور المخزنة بالمتجر ({mediaFiles.length} صورة)</span>
+                        <span>معرض الصور المخزنة بالمتجر ({combinedMediaFiles.length} صورة)</span>
                       </h4>
                       <p className="text-[11px] text-stone-400">
                         جميع الصور المرفوعة من جهاز الكمبيوتر متاحة هنا، ويمكنك نسخ رابط أي صورة أو تعيينها لأي قطعة ذهب.
@@ -2740,12 +2890,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   </div>
 
-                  {isLoadingMedia ? (
+                  {isLoadingMedia && combinedMediaFiles.length === 0 ? (
                     <div className="p-8 text-center text-xs text-stone-400 flex items-center justify-center gap-2">
                       <RefreshCw className="w-4 h-4 animate-spin text-[#D4AF37]" />
                       <span>جارٍ جلب مكتبة الصور...</span>
                     </div>
-                  ) : mediaFiles.length === 0 ? (
+                  ) : combinedMediaFiles.length === 0 ? (
                     <div className="p-8 text-center text-xs text-stone-500 space-y-2">
                       <ImageIcon className="w-8 h-8 mx-auto text-stone-600" />
                       <p>لا توجد صور مرفوعة بعد من الكمبيوتر.</p>
@@ -2755,13 +2905,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   ) : (
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3.5 pt-1">
-                      {mediaFiles
+                      {combinedMediaFiles
                         .filter((m) =>
                           mediaSearch ? m.filename.toLowerCase().includes(mediaSearch.toLowerCase()) : true
                         )
                         .map((file) => (
                           <div
-                            key={file.filename}
+                            key={file.url}
                             className="rounded-xl overflow-hidden bg-[#181922] border border-stone-800 hover:border-[#D4AF37]/50 transition-all flex flex-col justify-between group"
                           >
                             <div className="relative aspect-square bg-black overflow-hidden">

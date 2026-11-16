@@ -12,7 +12,7 @@ import {
   Gem,
   Check
 } from 'lucide-react';
-import { Product, StoreSettings, Category, CartItem } from './types/jewelry';
+import { Product, CartItem } from './types/jewelry';
 import { Navbar } from './components/Navbar';
 import { HeroBanner } from './components/HeroBanner';
 import { CategoriesBar } from './components/CategoriesBar';
@@ -23,13 +23,11 @@ import { GoldRatesModal } from './components/GoldRatesModal';
 import { AdminDashboard } from './components/AdminDashboard';
 import { FloatingWhatsApp } from './components/FloatingWhatsApp';
 import { Footer } from './components/Footer';
+import { useFirebase } from './context/FirebaseContext';
 
 export default function App() {
-  // Global Data State
-  const [settings, setSettings] = useState<StoreSettings | null>(null);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Real-time Firebase Firestore Data State
+  const { settings, categories, products, loading } = useFirebase();
 
   // Cart State (stored in localStorage)
   const [cart, setCart] = useState<CartItem[]>(() => {
@@ -64,52 +62,29 @@ export default function App() {
     }
   }, [cart]);
 
-  // Fetch initial data from persistent backend
-  const loadStoreData = async () => {
-    try {
-      setLoading(true);
-      const [settingsRes, categoriesRes, productsRes] = await Promise.all([
-        fetch('/api/settings'),
-        fetch('/api/categories'),
-        fetch('/api/products'),
-      ]);
-
-      const settingsData = await settingsRes.json();
-      const categoriesData = await categoriesRes.json();
-      const productsData = await productsRes.json();
-
-      if (settingsData.success) setSettings(settingsData.settings);
-      if (categoriesData.success) setCategories(categoriesData.categories);
-      if (productsData.success) setProducts(productsData.products);
-
-      // Check URL query parameters for shareable product links or direct admin access
-      if (typeof window !== 'undefined') {
-        const params = new URLSearchParams(window.location.search);
-        const productCode = params.get('product');
-        if (productCode && productsData.products) {
-          const match = productsData.products.find(
-            (p: Product) => p.code.toLowerCase() === productCode.toLowerCase()
-          );
-          if (match) {
-            setSelectedProduct(match);
-            document.title = match.seoTitle || `${match.name} | عيار ${match.karat} | سليمان جولد`;
-          }
-        }
-
-        if (params.get('admin') === 'true' || window.location.hash === '#admin') {
-          setIsAdminOpen(true);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to load store data:', err);
-    } finally {
-      setLoading(false);
+  // Check URL query parameters for shareable product links or direct admin access
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('admin') === 'true' || window.location.hash === '#admin') {
+      setIsAdminOpen(true);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    loadStoreData();
-  }, []);
+    if (typeof window === 'undefined' || products.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const productCode = params.get('product');
+    if (productCode && !selectedProduct) {
+      const match = products.find(
+        (p: Product) => p.code.toLowerCase() === productCode.toLowerCase()
+      );
+      if (match) {
+        setSelectedProduct(match);
+        document.title = match.seoTitle || `${match.name} | عيار ${match.karat} | سليمان جولد`;
+      }
+    }
+  }, [products]);
 
   // Cart operations
   const handleAddToCart = (product: Product) => {
@@ -754,7 +729,7 @@ export default function App() {
         categories={categories}
         products={products}
         onClose={() => setIsAdminOpen(false)}
-        onRefreshData={loadStoreData}
+        onRefreshData={() => {}}
       />
 
       {/* 9. Floating WhatsApp Quick Contact Button */}

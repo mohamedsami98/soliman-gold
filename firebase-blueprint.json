@@ -1,0 +1,314 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "A gold jewelry or bullion piece in the Soliman Gold catalog",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "code": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "karat": {
+          "type": "number"
+        },
+        "weight": {
+          "type": "number"
+        },
+        "price": {
+          "type": "number"
+        },
+        "hidePrice": {
+          "type": "boolean"
+        },
+        "inStock": {
+          "type": "boolean"
+        },
+        "isFeatured": {
+          "type": "boolean"
+        },
+        "isNew": {
+          "type": "boolean"
+        },
+        "isOffer": {
+          "type": "boolean"
+        },
+        "oldPrice": {
+          "type": "number"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 3000
+        },
+        "seoTitle": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "images": {
+          "type": "array",
+          "description": "List of image URLs (1 to 20 items)"
+        },
+        "craftsmanshipFee": {
+          "type": "number"
+        },
+        "order": {
+          "type": "number"
+        },
+        "views": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "code",
+        "name",
+        "category",
+        "karat",
+        "weight",
+        "price",
+        "inStock",
+        "images",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Jewelry store category definition",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "icon": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "order": {
+          "type": "number"
+        }
+      },
+      "required": ["id", "name"]
+    },
+    "StoreSettings": {
+      "title": "StoreSettings",
+      "description": "Public store settings, WhatsApp contact, branding, and live gold prices",
+      "type": "object",
+      "properties": {
+        "storeName": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "tagline": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "whatsappNumber": {
+          "type": "string",
+          "maxLength": 30
+        },
+        "phoneNumber": {
+          "type": "string",
+          "maxLength": 30
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "workHours": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "currency": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "heroBannerTitle": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "heroBannerSubtitle": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "heroBannerBadge": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "announcementBar": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "goldPrices": {
+          "type": "object"
+        },
+        "priceDisclaimer": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "autoCalcPrices": {
+          "type": "boolean"
+        },
+        "hideAllPrices": {
+          "type": "boolean"
+        },
+        "logoUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["storeName", "whatsappNumber", "currency", "goldPrices", "updatedAt"]
+    },
+    "AdminSecurityConfig": {
+      "title": "AdminSecurityConfig",
+      "description": "Private admin PIN configuration restricted strictly to verified store administrators",
+      "type": "object",
+      "properties": {
+        "adminPin": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 32
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["adminPin", "updatedAt"]
+    },
+    "MediaItem": {
+      "title": "MediaItem",
+      "description": "Metadata for uploaded jewelry images",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "filename": {
+          "type": "string",
+          "maxLength": 255
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "size": {
+          "type": "number"
+        },
+        "productCode": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "uploadedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "filename", "url", "size", "uploadedBy", "createdAt"]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Authorized store admin role record",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "owner"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "role", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": {
+        "$ref": "#/entities/Product"
+      },
+      "description": "Public jewelry catalog products"
+    },
+    "/categories/{categoryId}": {
+      "schema": {
+        "$ref": "#/entities/Category"
+      },
+      "description": "Storefront jewelry categories"
+    },
+    "/settings/{settingId}": {
+      "schema": {
+        "$ref": "#/entities/StoreSettings"
+      },
+      "description": "Public storefront configuration and gold prices (doc id: store)"
+    },
+    "/adminConfig/{configId}": {
+      "schema": {
+        "$ref": "#/entities/AdminSecurityConfig"
+      },
+      "description": "Private admin security PIN config (doc id: security)"
+    },
+    "/media/{mediaId}": {
+      "schema": {
+        "$ref": "#/entities/MediaItem"
+      },
+      "description": "Uploaded product image metadata records"
+    },
+    "/admins/{uid}": {
+      "schema": {
+        "$ref": "#/entities/AdminUser"
+      },
+      "description": "Authorized store administrators"
+    }
+  }
+}
